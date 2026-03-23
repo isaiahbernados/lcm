@@ -12,7 +12,13 @@ A Claude Code plugin that ensures **nothing is ever lost to context compaction**
 /reload-plugins
 ```
 
-No build step, no API key, no manual configuration. Hooks and MCP tools are registered automatically.
+No build step, no manual configuration. Hooks and MCP tools are registered automatically.
+
+**Optional — granular compaction:** Set an Anthropic API key to summarize every ~20K tokens (same granularity as lossless-claw). Without it, summaries are still created automatically on each compaction cycle.
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-api03-...  # add to ~/.zshrc or ~/.bashrc to persist
+```
 
 ---
 
