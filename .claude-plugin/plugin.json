@@ -1,0 +1,17 @@
+{
+  "name": "lcm",
+  "displayName": "Lossless Context Management",
+  "description": "Preserves every message in SQLite and rebuilds context after compaction via hierarchical DAG summaries. Never lose conversation history again.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Isaiah",
+    "url": "https://github.com/isaiah"
+  },
+  "homepage": "https://github.com/isaiah/lcm",
+  "license": "MIT",
+  "keywords": ["context", "memory", "compaction", "history", "sqlite", "dag"],
+  "minClaudeCodeVersion": "1.0.0",
+  "hooks": "./hooks/hooks.json",
+  "mcpServers": "./.mcp.json",
+  "skills": "./skills"
+}

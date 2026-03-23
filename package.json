@@ -1,0 +1,24 @@
+{
+  "name": "lcm",
+  "version": "0.1.0",
+  "description": "Lossless Context Management for Claude Code — persists every message in SQLite, compacts via hierarchical DAG summaries, and re-injects context after compaction.",
+  "type": "module",
+  "main": "dist/mcp-server/index.js",
+  "scripts": {
+    "build": "tsc",
+    "build:watch": "tsc --watch",
+    "test": "node --experimental-vm-modules node_modules/.bin/vitest run",
+    "prepare": "npm run build"
+  },
+  "keywords": ["claude-code", "context-management", "mcp", "lcm"],
+  "license": "MIT",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.52.0",
+    "@modelcontextprotocol/sdk": "^1.12.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.2.0"
+  }
+}
