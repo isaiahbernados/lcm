@@ -1,6 +1,6 @@
 # LCM — Lossless Context Management for Claude Code
 
-A Claude Code plugin that ensures **nothing is ever lost to context compaction**. Every message is persisted to SQLite, Claude's own compaction summaries are captured automatically, and you can search or expand your full conversation history at any time via MCP tools — all without a separate API key.
+A Claude Code plugin that ensures **nothing is ever lost to context compaction**. Every message is persisted to SQLite, Claude's own compaction summaries are captured automatically, and you can search or expand your full conversation history at any time via MCP tools — no API key required by default, with optional fine-grained summarization when one is provided.
 
 ---
 
@@ -63,7 +63,7 @@ flowchart TD
 | **After compaction** | Earlier messages are gone | All messages remain queryable |
 | **Across sessions** | Summary is re-injected at start | All prior sessions searchable |
 | **Search** | Not possible | Full-text search via `lcm_grep` |
-| **Cost** | Free (uses subscription) | Free (uses subscription, no separate API key) |
+| **Cost** | Free (uses subscription) | Free by default; optional Haiku calls if `ANTHROPIC_API_KEY` is set |
 | **Storage** | In Claude Code's memory | Local SQLite (`~/.lcm/lcm.db`) |
 | **DAG hierarchy** | Flat single summary | Multi-level summaries (compactable over time) |
 
@@ -76,7 +76,7 @@ The key insight: LCM doesn't fight compaction — it captures what Claude genera
 This plugin is an adaptation of the following work:
 
 - **LCM Paper** — [Lossless Context Management](https://papers.voltropy.com/LCM) — the academic paper describing the hierarchical DAG approach to context management
-- **lossless-claw** — [github.com/martian-engineering/lossless-claw](https://github.com/martian-engineering/lossless-claw) — the reference TypeScript implementation for OpenClaw, which this plugin heavily adapts. The key architectural difference: lossless-claw calls an LLM directly (e.g. Haiku via the Anthropic API) to generate its DAG summaries, giving it fine-grained control over chunking and compression. This plugin instead captures the `compact_summary` that Claude Code generates for free using your existing subscription, then lets Claude condense accumulated summaries via MCP tools. The tradeoff: no separate API key or billing, but leaf summaries are coarser (one per compaction cycle rather than one per 20K-token chunk).
+- **lossless-claw** — [github.com/martian-engineering/lossless-claw](https://github.com/martian-engineering/lossless-claw) — the reference TypeScript implementation for OpenClaw, which this plugin heavily adapts. The key architectural difference: lossless-claw calls an LLM directly (e.g. Haiku via the Anthropic API) to generate its DAG summaries, giving it fine-grained control over chunking and compression. This plugin has two modes: (1) **default/free** — captures the `compact_summary` Claude Code generates during compaction (coarser, one summary per compaction cycle); (2) **granular mode** — if `ANTHROPIC_API_KEY` is set, the Stop hook calls Haiku after each response to summarize every ~20K tokens, matching lossless-claw's chunking granularity. See [Granular Compaction](#granular-compaction-optional) below.
 - **Claude Code Hooks** — [Claude Code documentation](https://docs.anthropic.com/en/docs/claude-code) — the extension system that makes this plugin possible
 
 ---
@@ -211,6 +211,23 @@ lcm_grep(query: "database schema migration")
 lcm_expand_query(query: "the error we fixed in the login flow")
 ```
 
+### Granular compaction (optional)
+
+By default, LCM creates summaries only when Claude Code's built-in compaction fires. To get finer-grained summaries (one per ~20K tokens, same as lossless-claw), set an Anthropic API key:
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-api03-...
+# or use the LCM-specific override:
+export LCM_ANTHROPIC_API_KEY=sk-ant-api03-...
+```
+
+With this set, the Stop hook will automatically call Haiku after each response to summarize any message batch that crosses the token threshold. This means summaries accumulate throughout a session — not just at compaction boundaries — giving the retrieval tools much richer history to search.
+
+The token threshold is configurable:
+```bash
+export LCM_GRANULAR_THRESHOLD=10000  # summarize more frequently (default: 20000)
+```
+
 ### Proactive condensation
 
 When you have many stored summaries and want to compress them into a higher-level summary (free — Claude does it):
@@ -241,11 +258,13 @@ All settings via environment variables:
 
 ---
 
-## No API Key Required
+## API Key
 
-LCM uses **no external API calls**. All summarization is performed by Claude Code using your existing subscription:
+LCM works **without an API key by default**. In default mode, all summarization is performed by Claude Code using your existing subscription:
 
 - **Leaf summaries** — captured from Claude Code's own `compact_summary` output (generated for free during compaction)
 - **DAG condensation** — done by Claude itself via `lcm_request_compact` + `lcm_store_summary` MCP tools
 
-The only dependencies are `@modelcontextprotocol/sdk` and Node.js's built-in `node:sqlite`.
+**Optional:** Set `ANTHROPIC_API_KEY` (or `LCM_ANTHROPIC_API_KEY`) to enable granular compaction — Haiku summarizes every ~20K tokens during the session, not just at compaction boundaries. This costs a small amount per summarization call (~$0.001 each) but produces much finer-grained history.
+
+The only required dependency is `@modelcontextprotocol/sdk` and Node.js's built-in `node:sqlite`. `@anthropic-ai/sdk` is included but only invoked when an API key is present.
