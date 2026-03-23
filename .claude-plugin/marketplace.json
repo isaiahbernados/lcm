@@ -1,0 +1,21 @@
+{
+  "name": "lcm",
+  "owner": {
+    "name": "Isaiah",
+    "email": ""
+  },
+  "plugins": [
+    {
+      "name": "lcm",
+      "source": "./",
+      "description": "Preserves every message in SQLite and rebuilds context after compaction via hierarchical DAG summaries. Never lose conversation history again.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Isaiah"
+      },
+      "homepage": "https://github.com/isaiahbernados/lcm",
+      "license": "MIT",
+      "keywords": ["context", "memory", "compaction", "history", "sqlite", "dag"]
+    }
+  ]
+}
