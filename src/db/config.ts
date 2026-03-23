@@ -10,6 +10,10 @@ export interface LcmConfig {
   postCompactInjectionTokens: number;
   /** Whether LCM is enabled */
   enabled: boolean;
+  /** Anthropic API key for granular compaction (optional). If set, summarizes every ~granularCompactThreshold tokens using Haiku. */
+  anthropicApiKey: string | null;
+  /** Token threshold for triggering a granular summary (requires anthropicApiKey). Default 20000. */
+  granularCompactThreshold: number;
 }
 
 function defaultDbPath(): string {
@@ -22,5 +26,7 @@ export function loadConfig(): LcmConfig {
     freshTailCount: parseInt(process.env['LCM_FRESH_TAIL_COUNT'] ?? '32', 10),
     postCompactInjectionTokens: parseInt(process.env['LCM_POST_COMPACT_TOKENS'] ?? '3000', 10),
     enabled: (process.env['LCM_ENABLED'] ?? 'true') !== 'false',
+    anthropicApiKey: process.env['LCM_ANTHROPIC_API_KEY'] ?? process.env['ANTHROPIC_API_KEY'] ?? null,
+    granularCompactThreshold: parseInt(process.env['LCM_GRANULAR_THRESHOLD'] ?? '20000', 10),
   };
 }

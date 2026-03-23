@@ -236,6 +236,8 @@ All settings via environment variables:
 | `LCM_ENABLED` | `true` | Set to `false` to disable |
 | `LCM_LOG_FILE` | `~/.lcm/lcm.log` | Log file path |
 | `LCM_DEBUG` | _(unset)_ | Set to any value to enable debug logging |
+| `LCM_ANTHROPIC_API_KEY` | _(unset)_ | Anthropic API key for granular compaction. If set (falls back to `ANTHROPIC_API_KEY`), summarizes every ~20K tokens using Haiku — same approach as lossless-claw. Without this, summaries are only created on compaction. |
+| `LCM_GRANULAR_THRESHOLD` | `20000` | Token threshold for triggering a granular summary (requires `LCM_ANTHROPIC_API_KEY`). |
 
 ---
 

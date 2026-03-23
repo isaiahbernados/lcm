@@ -7,6 +7,10 @@ export interface LcmConfig {
     postCompactInjectionTokens: number;
     /** Whether LCM is enabled */
     enabled: boolean;
+    /** Anthropic API key for granular compaction (optional). If set, summarizes every ~granularCompactThreshold tokens using Haiku. */
+    anthropicApiKey: string | null;
+    /** Token threshold for triggering a granular summary (requires anthropicApiKey). Default 20000. */
+    granularCompactThreshold: number;
 }
 export declare function loadConfig(): LcmConfig;
 //# sourceMappingURL=config.d.ts.map
