@@ -18,8 +18,14 @@ fi
 HOOK_SCRIPT="${DIST_DIR}/${HOOK_NAME}.js"
 
 if [ ! -f "$HOOK_SCRIPT" ]; then
-  # Plugin not built yet — silently exit so Claude Code isn't blocked
+  # Plugin not built — silently exit so Claude Code isn't blocked
   exit 0
+fi
+
+# Use CLAUDE_PLUGIN_DATA for DB when running as an installed plugin,
+# fall back to ~/.lcm for manual/dev installs
+if [ -n "${CLAUDE_PLUGIN_DATA:-}" ]; then
+  export LCM_DB_PATH="${CLAUDE_PLUGIN_DATA}/lcm.db"
 fi
 
 exec node "$HOOK_SCRIPT"

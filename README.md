@@ -114,66 +114,58 @@ lcm/
 - [Claude Code](https://claude.ai/code) CLI installed
 - Node.js 22+ (uses built-in `node:sqlite` — no native modules required)
 
-### Install
+### Install via Claude Code plugin system (recommended)
 
 ```bash
-# Clone the repo
-git clone https://github.com/isaiahbernados/lcm
-cd lcm
+# 1. Add this repo as a marketplace source
+/plugin marketplace add isaiahbernados/lcm
 
-# Install dependencies and build
-npm install --ignore-scripts
-npm run build
+# 2. Install the plugin
+/plugin install lcm@isaiahbernados
+
+# 3. Reload plugins in your current session
+/reload-plugins
 ```
 
-### Configure Claude Code
+That's it. Hooks and the MCP server are registered automatically. The plugin ships with pre-built JS — no build step required.
 
-Add to your `~/.claude/settings.json`:
+### Manual install
+
+If you prefer to install manually or use a development checkout:
+
+```bash
+git clone https://github.com/isaiahbernados/lcm ~/lcm
+```
+
+Then add to `~/.claude/settings.json`:
 
 ```json
 {
   "hooks": {
     "SessionStart": [
-      {
-        "matcher": "",
-        "hooks": [{ "type": "command", "command": "/path/to/lcm/hooks/run-hook.sh session-start" }]
-      }
+      { "matcher": "", "hooks": [{ "type": "command", "command": "~/lcm/hooks/run-hook.sh session-start" }] }
     ],
     "UserPromptSubmit": [
-      {
-        "matcher": "",
-        "hooks": [{ "type": "command", "command": "/path/to/lcm/hooks/run-hook.sh user-prompt-submit" }]
-      }
+      { "matcher": "", "hooks": [{ "type": "command", "command": "~/lcm/hooks/run-hook.sh user-prompt-submit" }] }
     ],
     "Stop": [
-      {
-        "matcher": "",
-        "hooks": [{ "type": "command", "command": "/path/to/lcm/hooks/run-hook.sh stop" }]
-      }
+      { "matcher": "", "hooks": [{ "type": "command", "command": "~/lcm/hooks/run-hook.sh stop" }] }
     ],
     "PreCompact": [
-      {
-        "matcher": "",
-        "hooks": [{ "type": "command", "command": "/path/to/lcm/hooks/run-hook.sh pre-compact", "timeout": 60 }]
-      }
+      { "matcher": "", "hooks": [{ "type": "command", "command": "~/lcm/hooks/run-hook.sh pre-compact", "timeout": 60 }] }
     ],
     "PostCompact": [
-      {
-        "matcher": "",
-        "hooks": [{ "type": "command", "command": "/path/to/lcm/hooks/run-hook.sh post-compact" }]
-      }
+      { "matcher": "", "hooks": [{ "type": "command", "command": "~/lcm/hooks/run-hook.sh post-compact" }] }
     ]
   },
   "mcpServers": {
     "lcm": {
       "command": "node",
-      "args": ["/path/to/lcm/dist/mcp-server/index.js"]
+      "args": ["~/lcm/dist/mcp-server/index.js"]
     }
   }
 }
 ```
-
-Replace `/path/to/lcm` with the actual path where you cloned the repo (e.g. `~/src/lcm`).
 
 ### Verify
 
@@ -190,7 +182,7 @@ lcm_request_compact, lcm_store_summary
 
 ### Automatic (no action required)
 
-LCM works silently in the background. Every message is captured to `~/.lcm/lcm.db`. When compaction happens, the summary Claude generates is stored and re-injected automatically.
+LCM works silently in the background. Every message is captured to SQLite (`~/.claude/plugins/data/lcm/lcm.db` when installed via `/plugin install`, or `~/.lcm/lcm.db` for manual installs). When compaction happens, the summary Claude generates is stored and re-injected automatically.
 
 ### Retrieving history
 

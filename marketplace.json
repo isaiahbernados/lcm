@@ -1,0 +1,13 @@
+{
+  "name": "isaiahbernados",
+  "description": "LCM — Lossless Context Management plugins",
+  "plugins": [
+    {
+      "name": "lcm",
+      "description": "Lossless Context Management for Claude Code. Persists every message to SQLite, captures compaction summaries automatically, and lets Claude search its full history via MCP tools. No API key required.",
+      "path": ".",
+      "version": "0.1.0",
+      "keywords": ["context", "memory", "compaction", "sqlite", "history"]
+    }
+  ]
+}
