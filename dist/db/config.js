@@ -11,6 +11,7 @@ export function loadConfig() {
         enabled: (process.env['LCM_ENABLED'] ?? 'true') !== 'false',
         anthropicApiKey: process.env['LCM_ANTHROPIC_API_KEY'] ?? process.env['ANTHROPIC_API_KEY'] ?? null,
         granularCompactThreshold: parseInt(process.env['LCM_GRANULAR_THRESHOLD'] ?? '20000', 10),
+        useCliSummarizer: (process.env['LCM_USE_CLI'] ?? 'false') !== 'false',
     };
 }
 //# sourceMappingURL=config.js.map

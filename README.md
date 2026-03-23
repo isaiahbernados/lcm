@@ -14,11 +14,17 @@ A Claude Code plugin that ensures **nothing is ever lost to context compaction**
 
 No build step, no manual configuration. Hooks and MCP tools are registered automatically.
 
-**Optional — granular compaction:** Set an Anthropic API key to summarize every ~20K tokens (same granularity as lossless-claw). Without it, summaries are still created automatically on each compaction cycle.
+**Optional — granular compaction:** Summarize every ~20K tokens (same granularity as lossless-claw). Two options:
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-api03-...  # add to ~/.zshrc or ~/.bashrc to persist
+# Free — uses your Claude subscription via claude -p (~5-6s/call):
+export LCM_USE_CLI=true
+
+# Faster — direct Haiku API calls (~1s/call, costs ~$0.001/call):
+export ANTHROPIC_API_KEY=sk-ant-api03-...
 ```
+
+Without either, summaries are still created automatically on each compaction cycle.
 
 ---
 
@@ -219,17 +225,23 @@ lcm_expand_query(query: "the error we fixed in the login flow")
 
 ### Granular compaction (optional)
 
-By default, LCM creates summaries only when Claude Code's built-in compaction fires. To get finer-grained summaries (one per ~20K tokens, same as lossless-claw), set an Anthropic API key:
+By default, LCM creates summaries only when Claude Code's built-in compaction fires. To get finer-grained summaries (one per ~20K tokens, same as lossless-claw), enable one of two modes:
 
+**Option A — `claude -p` (free, uses your subscription):**
+```bash
+export LCM_USE_CLI=true
+```
+Spawns `claude -p --model claude-haiku-4-5-20251001` as a subprocess after each response. No API key required. Adds ~5-6s per summarization call.
+
+**Option B — Haiku SDK (faster, requires API key):**
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-api03-...
-# or use the LCM-specific override:
-export LCM_ANTHROPIC_API_KEY=sk-ant-api03-...
+# or: export LCM_ANTHROPIC_API_KEY=sk-ant-api03-...
 ```
+Calls Haiku directly via the Anthropic SDK. ~1s per call. If both options are configured, the SDK takes priority.
 
-With this set, the Stop hook will automatically call Haiku after each response to summarize any message batch that crosses the token threshold. This means summaries accumulate throughout a session — not just at compaction boundaries — giving the retrieval tools much richer history to search.
+With either mode, the Stop hook summarizes any message batch that crosses the token threshold — so summaries accumulate throughout a session, not just at compaction boundaries.
 
-The token threshold is configurable:
 ```bash
 export LCM_GRANULAR_THRESHOLD=10000  # summarize more frequently (default: 20000)
 ```
@@ -259,8 +271,10 @@ All settings via environment variables:
 | `LCM_ENABLED` | `true` | Set to `false` to disable |
 | `LCM_LOG_FILE` | `~/.lcm/lcm.log` | Log file path |
 | `LCM_DEBUG` | _(unset)_ | Set to any value to enable debug logging |
-| `LCM_ANTHROPIC_API_KEY` | _(unset)_ | Anthropic API key for granular compaction. If set (falls back to `ANTHROPIC_API_KEY`), summarizes every ~20K tokens using Haiku — same approach as lossless-claw. Without this, summaries are only created on compaction. |
-| `LCM_GRANULAR_THRESHOLD` | `20000` | Token threshold for triggering a granular summary (requires `LCM_ANTHROPIC_API_KEY`). |
+| `LCM_USE_CLI` | `false` | Set to `true` to enable granular compaction via `claude -p` subprocess (free, uses subscription, ~5-6s/call). |
+| `LCM_CLI_MODEL` | `claude-haiku-4-5-20251001` | Model passed to `claude -p` for CLI-based summarization. |
+| `LCM_ANTHROPIC_API_KEY` | _(unset)_ | Anthropic API key for granular compaction via SDK (~1s/call). Falls back to `ANTHROPIC_API_KEY`. Takes priority over `LCM_USE_CLI` if both are set. |
+| `LCM_GRANULAR_THRESHOLD` | `20000` | Token threshold for triggering a granular summary (requires `LCM_USE_CLI` or `LCM_ANTHROPIC_API_KEY`). |
 
 ---
 

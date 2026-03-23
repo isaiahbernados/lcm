@@ -9,10 +9,14 @@ import type { HookContext } from './orchestrator.js';
 import type { HookOutput } from '../core/types.js';
 import { ingestNewMessages } from './ingest.js';
 import { summarizeMessages } from '../core/summarize.js';
+import { summarizeWithCLI } from '../core/summarize-cli.js';
 import { estimateTokens } from '../core/transcript-reader.js';
 import { logger } from '../utils/logger.js';
 
 async function handler(ctx: HookContext): Promise<HookOutput> {
+  // Recursion guard: claude -p subprocesses set this to prevent re-triggering
+  if (process.env['LCM_SUBPROCESS'] === '1') return {};
+
   const { input, conversationStore, summaryStore, config } = ctx;
   if (!input.transcript_path) return {};
 
@@ -24,8 +28,10 @@ async function handler(ctx: HookContext): Promise<HookOutput> {
     summaryStore
   );
 
-  // Granular compaction: if an API key is set, summarize every ~granularCompactThreshold tokens
-  if (config.anthropicApiKey && messagesIngested > 0) {
+  // Granular compaction: summarize every ~granularCompactThreshold tokens
+  // Priority: Haiku SDK (if API key set) > claude -p CLI (if LCM_USE_CLI=true) > skip
+  const granularEnabled = config.anthropicApiKey || config.useCliSummarizer;
+  if (granularEnabled && messagesIngested > 0) {
     try {
       const conversation = conversationStore.getOrCreateConversation(input.session_id, input.cwd ?? '');
       const lastSeq = summaryStore.getMaxCompactedSequence(conversation.id);
@@ -34,9 +40,13 @@ async function handler(ctx: HookContext): Promise<HookOutput> {
 
       if (pendingTokens >= config.granularCompactThreshold && pending.length > 0) {
         const maxSeq = pending[pending.length - 1]!.sequenceNumber;
-        logger.info('Stop: token threshold reached, summarizing', { tokens: pendingTokens, messages: pending.length });
+        const mode = config.anthropicApiKey ? 'haiku-sdk' : 'claude-cli';
+        logger.info('Stop: token threshold reached, summarizing', { tokens: pendingTokens, messages: pending.length, mode });
 
-        const summaryText = await summarizeMessages(pending, config.anthropicApiKey);
+        const summaryText = config.anthropicApiKey
+          ? await summarizeMessages(pending, config.anthropicApiKey)
+          : await summarizeWithCLI(pending);
+
         summaryStore.insertSummary({
           conversationId: conversation.id,
           parentId: null,
@@ -47,7 +57,7 @@ async function handler(ctx: HookContext): Promise<HookOutput> {
           messageRangeEnd: maxSeq,
         });
 
-        logger.info('Stop: granular summary stored', { range: `${lastSeq + 1}-${maxSeq}` });
+        logger.info('Stop: granular summary stored', { range: `${lastSeq + 1}-${maxSeq}`, mode });
       }
     } catch (err) {
       // Granular compaction is best-effort — never block the Stop hook
