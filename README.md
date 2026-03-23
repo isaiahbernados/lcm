@@ -21,36 +21,24 @@ LCM layers on top of Claude Code's existing compaction without replacing it. It:
 
 ```mermaid
 flowchart TD
-    A([User sends message]) --> B[UserPromptSubmit hook\nIngests message to SQLite]
-    B --> C[Claude processes & responds]
-    C --> D[Stop hook\nIngests response to SQLite]
-    D --> E{Context window\nfull?}
+    A([User sends message]) --> B[UserPromptSubmit hook\nIngest message to SQLite]
+    B --> C[Claude processes and responds]
+    C --> D[Stop hook\nIngest response to SQLite]
+    D --> E{Context window full?}
     E -- No --> A
     E -- Yes --> F[PreCompact hook\nSnapshot final messages]
-    F --> G[Claude Code runs\nbuilt-in compaction]
-    G --> H[PostCompact hook\nCaptures compact_summary\nStores in SQLite]
-    H --> I[Re-injects stored\nsummaries as context]
+    F --> G[Claude Code runs built-in compaction]
+    G --> H[PostCompact hook\nCapture compact_summary\nStore in SQLite]
+    H --> I[Re-inject stored summaries\nas additionalContext]
     I --> C
 
-    subgraph MCP Server
-        J[lcm_grep\nSearch all history]
-        K[lcm_expand\nRetrieve original messages]
-        L[lcm_describe\nInspect a summary or message]
-        M[lcm_request_compact\nGet summaries to condense]
-        N[lcm_store_summary\nStore Claude-generated summary]
-    end
-
-    C <-->|Claude calls tools\nto retrieve history| MCP Server
-
-    subgraph SQLite DB
-        O[(conversations)]
-        P[(messages + FTS5 index)]
-        Q[(summaries DAG)]
-        R[(transcript_cursors)]
-    end
-
-    B & D & H --> SQLite DB
-    MCP Server --> SQLite DB
+    C -- calls --> J[lcm_grep\nlcm_expand\nlcm_describe]
+    C -- calls --> K[lcm_request_compact\nlcm_store_summary]
+    J --> DB[(SQLite\nlcm.db)]
+    K --> DB
+    B --> DB
+    D --> DB
+    H --> DB
 ```
 
 ---
