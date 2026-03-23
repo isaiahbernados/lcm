@@ -46,9 +46,36 @@ lcm_expand_query(query: "the login flow we discussed")
 lcm_expand_query(query: "error handling approach", max_results: 3)
 ```
 
-## Workflow
+### `lcm_request_compact` — Request summaries to condense
+Returns accumulated summaries ready for you to condense into a higher-level summary.
+```
+lcm_request_compact(conversation_id: "conv_abc123")
+```
+
+### `lcm_store_summary` — Store a summary you generated
+After receiving summaries from lcm_request_compact, condense them and store the result.
+```
+lcm_store_summary(
+  conversation_id: "conv_abc123",
+  content: "Your condensed summary here...",
+  source_summary_ids: ["sum_1", "sum_2", "sum_3"],
+  level: 1
+)
+```
+
+## Retrieval workflow
 
 1. Start with `lcm_grep` to find what you're looking for
 2. Use `lcm_describe` on promising IDs to see metadata
 3. Use `lcm_expand` to retrieve full original messages
 4. Or use `lcm_expand_query` to do steps 1-3 in one call
+
+## Active memory management workflow
+
+When you have accumulated many summaries and want to compress them:
+1. Call `lcm_request_compact(conversation_id: "...")` to get summaries needing condensation
+2. Read the summaries returned
+3. Write a concise condensed summary preserving all key facts and decisions
+4. Call `lcm_store_summary(...)` with your condensed result
+
+This uses your existing model subscription — no separate API key required.

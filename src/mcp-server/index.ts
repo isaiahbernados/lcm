@@ -2,8 +2,10 @@
 /**
  * LCM MCP Server — stdio transport.
  *
- * Exposes lcm_grep, lcm_describe, lcm_expand, lcm_expand_query as MCP tools
- * so Claude can search and retrieve its full conversation history.
+ * Exposes lcm_grep, lcm_describe, lcm_expand, lcm_expand_query,
+ * lcm_request_compact, and lcm_store_summary as MCP tools.
+ *
+ * No Anthropic API key required — summarization is done by Claude Code itself.
  */
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
@@ -30,6 +32,7 @@ async function main() {
   const conversationStore = new ConversationStore(db);
   const summaryStore = new SummaryStore(db);
   const engine = new RetrievalEngine(conversationStore, summaryStore);
+  const toolCtx = { engine, summaryStore, conversationStore };
 
   const server = new Server(
     { name: 'lcm', version: '0.1.0' },
@@ -56,7 +59,7 @@ async function main() {
     }
 
     try {
-      const result = tool.handler(args ?? {}, engine);
+      const result = tool.handler(args ?? {}, toolCtx);
       return {
         content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
       };
