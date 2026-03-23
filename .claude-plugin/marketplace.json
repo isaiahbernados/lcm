@@ -9,7 +9,7 @@
       "name": "lcm",
       "source": "./",
       "description": "Preserves every message in SQLite and rebuilds context after compaction via hierarchical DAG summaries. Never lose conversation history again.",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "author": {
         "name": "Isaiah"
       },
