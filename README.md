@@ -4,6 +4,18 @@ A Claude Code plugin that ensures **nothing is ever lost to context compaction**
 
 ---
 
+## Quick Start
+
+```bash
+/plugin marketplace add isaiahbernados/lcm
+/plugin install lcm@isaiahbernados
+/reload-plugins
+```
+
+No build step, no API key, no manual configuration. Hooks and MCP tools are registered automatically.
+
+---
+
 ## The Problem
 
 Claude Code has a finite context window. When it fills up, the built-in `/compact` command (or auto-compaction) condenses the conversation into a single summary and discards the original messages. That summary is good, but it's lossy — specific code snippets, file paths, error messages, and nuanced decisions don't survive.
@@ -64,7 +76,7 @@ The key insight: LCM doesn't fight compaction — it captures what Claude genera
 This plugin is an adaptation of the following work:
 
 - **LCM Paper** — [Lossless Context Management](https://papers.voltropy.com/LCM) — the academic paper describing the hierarchical DAG approach to context management
-- **lossless-claw** — [github.com/martian-engineering/lossless-claw](https://github.com/martian-engineering/lossless-claw) — the reference TypeScript implementation for OpenClaw, which this plugin heavily adapts
+- **lossless-claw** — [github.com/martian-engineering/lossless-claw](https://github.com/martian-engineering/lossless-claw) — the reference TypeScript implementation for OpenClaw, which this plugin heavily adapts. The key architectural difference: lossless-claw calls an LLM directly (e.g. Haiku via the Anthropic API) to generate its DAG summaries, giving it fine-grained control over chunking and compression. This plugin instead captures the `compact_summary` that Claude Code generates for free using your existing subscription, then lets Claude condense accumulated summaries via MCP tools. The tradeoff: no separate API key or billing, but leaf summaries are coarser (one per compaction cycle rather than one per 20K-token chunk).
 - **Claude Code Hooks** — [Claude Code documentation](https://docs.anthropic.com/en/docs/claude-code) — the extension system that makes this plugin possible
 
 ---
