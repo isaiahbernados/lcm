@@ -5,9 +5,9 @@
   "version": "0.1.0",
   "author": {
     "name": "Isaiah",
-    "url": "https://github.com/isaiah"
+    "url": "https://github.com/isaiahbernados"
   },
-  "homepage": "https://github.com/isaiah/lcm",
+  "homepage": "https://github.com/isaiahbernados/lcm",
   "license": "MIT",
   "keywords": ["context", "memory", "compaction", "history", "sqlite", "dag"],
   "minClaudeCodeVersion": "1.0.0",
