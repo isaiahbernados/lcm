@@ -99,6 +99,7 @@ export interface HookInput {
 }
 
 export interface HookOutput {
+  systemMessage?: string;
   hookSpecificOutput?: {
     hookEventName: string;
     additionalContext?: string;

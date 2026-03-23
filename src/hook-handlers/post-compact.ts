@@ -57,10 +57,7 @@ async function handler(ctx: HookContext): Promise<HookOutput> {
 
   logger.info('PostCompact: injecting context block');
   return {
-    hookSpecificOutput: {
-      hookEventName: 'PostCompact',
-      additionalContext: contextBlock,
-    },
+    systemMessage: contextBlock,
   };
 }
 
