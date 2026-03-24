@@ -119,6 +119,22 @@ function runMigrations(db) {
       byte_offset INTEGER NOT NULL DEFAULT 0,
       last_timestamp INTEGER NOT NULL DEFAULT 0
     );
+
+    CREATE TABLE IF NOT EXISTS files (
+      id TEXT PRIMARY KEY,
+      message_id TEXT NOT NULL,
+      conversation_id TEXT NOT NULL,
+      file_path TEXT,
+      file_type TEXT NOT NULL DEFAULT 'text',
+      raw_token_count INTEGER NOT NULL,
+      content_preview TEXT NOT NULL,
+      exploration_summary TEXT,
+      created_at INTEGER NOT NULL,
+      FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE,
+      FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_files_conversation_id ON files(conversation_id);
+    CREATE INDEX IF NOT EXISTS idx_files_message_id ON files(message_id);
   `);
 }
 
@@ -136,7 +152,9 @@ function loadConfig() {
     enabled: (process.env["LCM_ENABLED"] ?? "true") !== "false",
     anthropicApiKey: process.env["LCM_ANTHROPIC_API_KEY"] ?? process.env["ANTHROPIC_API_KEY"] ?? null,
     granularCompactThreshold: parseInt(process.env["LCM_GRANULAR_THRESHOLD"] ?? "20000", 10),
-    useCliSummarizer: (process.env["LCM_USE_CLI"] ?? "false") !== "false"
+    useCliSummarizer: (process.env["LCM_USE_CLI"] ?? "false") !== "false",
+    condensationThreshold: parseInt(process.env["LCM_CONDENSATION_THRESHOLD"] ?? "5", 10),
+    largeFileThreshold: parseInt(process.env["LCM_LARGE_FILE_THRESHOLD"] ?? "25000", 10)
   };
 }
 
@@ -370,6 +388,17 @@ var SummaryStore = class {
     ).all(summaryId);
     return rows.map((r) => r.message_id);
   }
+  /** Update a summary's parentId (used by condensation to link children to their parent). */
+  updateParentId(summaryId, parentId) {
+    this.db.prepare("UPDATE summaries SET parent_id = ? WHERE id = ?").run(parentId, summaryId);
+  }
+  /** Get uncondensed summaries at a given level (parent_id IS NULL). */
+  getUncondensedSummaries(conversationId, level) {
+    const rows = this.db.prepare(
+      "SELECT * FROM summaries WHERE conversation_id = ? AND level = ? AND parent_id IS NULL ORDER BY message_range_start ASC"
+    ).all(conversationId, level);
+    return rows.map(rowToSummary);
+  }
   /** Get the highest compacted sequence number for a conversation */
   getMaxCompactedSequence(conversationId) {
     const row = this.db.prepare(
@@ -436,6 +465,73 @@ var SummaryStore = class {
   }
 };
 
+// src/core/file-store.ts
+import { randomUUID as randomUUID3 } from "node:crypto";
+function rowToFile(row) {
+  return {
+    id: row.id,
+    messageId: row.message_id,
+    conversationId: row.conversation_id,
+    filePath: row.file_path,
+    fileType: row.file_type,
+    rawTokenCount: row.raw_token_count,
+    contentPreview: row.content_preview,
+    explorationSummary: row.exploration_summary,
+    createdAt: row.created_at
+  };
+}
+var FileStore = class {
+  constructor(db) {
+    this.db = db;
+  }
+  insertFile(params) {
+    const id = `file_${randomUUID3()}`;
+    const now = Date.now();
+    this.db.prepare(
+      `INSERT INTO files (id, message_id, conversation_id, file_path, file_type, raw_token_count, content_preview, exploration_summary, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      id,
+      params.messageId,
+      params.conversationId,
+      params.filePath ?? null,
+      params.fileType,
+      params.rawTokenCount,
+      params.contentPreview,
+      params.explorationSummary ?? null,
+      now
+    );
+    return {
+      id,
+      messageId: params.messageId,
+      conversationId: params.conversationId,
+      filePath: params.filePath ?? null,
+      fileType: params.fileType,
+      rawTokenCount: params.rawTokenCount,
+      contentPreview: params.contentPreview,
+      explorationSummary: params.explorationSummary ?? null,
+      createdAt: now
+    };
+  }
+  getFile(fileId) {
+    const row = this.db.prepare(
+      "SELECT * FROM files WHERE id = ?"
+    ).get(fileId);
+    return row ? rowToFile(row) : null;
+  }
+  getFilesForConversation(conversationId) {
+    const rows = this.db.prepare(
+      "SELECT * FROM files WHERE conversation_id = ? ORDER BY created_at ASC"
+    ).all(conversationId);
+    return rows.map(rowToFile);
+  }
+  updateExplorationSummary(fileId, summary) {
+    this.db.prepare(
+      "UPDATE files SET exploration_summary = ? WHERE id = ?"
+    ).run(summary, fileId);
+  }
+};
+
 // src/utils/logger.ts
 import fs2 from "node:fs";
 import path3 from "node:path";
@@ -498,7 +594,8 @@ async function runHook(handler2) {
   }
   const conversationStore = new ConversationStore(db);
   const summaryStore = new SummaryStore(db);
-  const ctx = { input, conversationStore, summaryStore, config };
+  const fileStore = new FileStore(db);
+  const ctx = { input, conversationStore, summaryStore, fileStore, config };
   let output = {};
   try {
     output = await handler2(ctx);
@@ -610,8 +707,160 @@ function readNewTranscriptEntries(transcriptPath, cursor) {
   };
 }
 
+// src/core/file-analyzer.ts
+function detectFileType(content) {
+  const trimmed = content.trim();
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+    try {
+      JSON.parse(trimmed);
+      return "json";
+    } catch {
+    }
+  }
+  const upperContent = content.toUpperCase();
+  if (/CREATE\s+TABLE\b|CREATE\s+VIEW\b|CREATE\s+INDEX\b/.test(upperContent)) {
+    return "sql";
+  }
+  if (/<[a-zA-Z][a-zA-Z0-9]*[\s/>]/.test(content) || /<!DOCTYPE\s/i.test(content)) {
+    return "xml";
+  }
+  if (/\bfunction\s+\w+\s*\(|\bclass\s+\w+|\bimport\s+[\w{*]|\bdef\s+\w+\s*\(|\bexport\s+(function|class|const|default)\b/.test(content)) {
+    return "code";
+  }
+  return "text";
+}
+function generateExplorationSummary(content, fileType) {
+  switch (fileType) {
+    case "json":
+      return summarizeJson(content);
+    case "code":
+      return summarizeCode(content);
+    case "sql":
+      return summarizeSql(content);
+    default:
+      return summarizeFallback(content);
+  }
+}
+function summarizeJson(content) {
+  try {
+    const parsed = JSON.parse(content.trim());
+    const lines = ["[JSON]"];
+    if (Array.isArray(parsed)) {
+      lines.push(`Array of ${parsed.length} items`);
+      if (parsed.length > 0 && typeof parsed[0] === "object" && parsed[0] !== null) {
+        const keys = Object.keys(parsed[0]);
+        lines.push(`Item keys: ${keys.slice(0, 10).join(", ")}${keys.length > 10 ? ` (+${keys.length - 10} more)` : ""}`);
+      }
+    } else if (typeof parsed === "object" && parsed !== null) {
+      const obj = parsed;
+      const keys = Object.keys(obj);
+      lines.push(`Object with ${keys.length} top-level keys:`);
+      for (const key of keys.slice(0, 20)) {
+        const val = obj[key];
+        if (Array.isArray(val)) {
+          lines.push(`  ${key}: Array(${val.length})`);
+        } else if (val === null) {
+          lines.push(`  ${key}: null`);
+        } else {
+          lines.push(`  ${key}: ${typeof val}`);
+        }
+      }
+      if (keys.length > 20) {
+        lines.push(`  ... and ${keys.length - 20} more keys`);
+      }
+    } else {
+      lines.push(`Primitive: ${typeof parsed}`);
+    }
+    return lines.join("\n");
+  } catch {
+    return summarizeFallback(content);
+  }
+}
+function summarizeCode(content) {
+  const lines = ["[CODE]"];
+  const signatures = [];
+  const funcMatches = content.matchAll(/(?:export\s+)?(?:async\s+)?function\s+(\w+)\s*\([^)]*\)/g);
+  for (const m of funcMatches) {
+    signatures.push(`function ${m[1]}()`);
+  }
+  const exportFuncMatches = content.matchAll(/export\s+(?:async\s+)?function\s+(\w+)/g);
+  for (const m of exportFuncMatches) {
+    const sig = `export function ${m[1]}()`;
+    if (!signatures.includes(sig)) signatures.push(sig);
+  }
+  const classMatches = content.matchAll(/(?:export\s+)?class\s+(\w+)(?:\s+extends\s+\w+)?/g);
+  for (const m of classMatches) {
+    signatures.push(`class ${m[1]}`);
+  }
+  const defMatches = content.matchAll(/def\s+(\w+)\s*\([^)]*\)/g);
+  for (const m of defMatches) {
+    signatures.push(`def ${m[1]}()`);
+  }
+  const arrowMatches = content.matchAll(/(?:export\s+)?(?:const|let)\s+(\w+)\s*=\s*(?:async\s*)?\([^)]*\)\s*=>/g);
+  for (const m of arrowMatches) {
+    signatures.push(`${m[1]} = () =>`);
+  }
+  const seen = /* @__PURE__ */ new Set();
+  const unique = signatures.filter((s) => {
+    if (seen.has(s)) return false;
+    seen.add(s);
+    return true;
+  });
+  if (unique.length > 0) {
+    lines.push(`Signatures (${unique.length}):`);
+    for (const sig of unique.slice(0, 30)) {
+      lines.push(`  ${sig}`);
+    }
+    if (unique.length > 30) {
+      lines.push(`  ... and ${unique.length - 30} more`);
+    }
+  } else {
+    lines.push("No function/class signatures detected");
+    lines.push(content.slice(0, 300) + (content.length > 300 ? "..." : ""));
+  }
+  return lines.join("\n");
+}
+function summarizeSql(content) {
+  const lines = ["[SQL]"];
+  const statements = [];
+  const tableMatches = content.matchAll(/CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(\S+)/gi);
+  for (const m of tableMatches) {
+    statements.push(`CREATE TABLE ${m[1]}`);
+  }
+  const viewMatches = content.matchAll(/CREATE\s+VIEW\s+(?:IF\s+NOT\s+EXISTS\s+)?(\S+)/gi);
+  for (const m of viewMatches) {
+    statements.push(`CREATE VIEW ${m[1]}`);
+  }
+  const indexMatches = content.matchAll(/CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?(\S+)/gi);
+  for (const m of indexMatches) {
+    statements.push(`CREATE INDEX ${m[1]}`);
+  }
+  if (statements.length > 0) {
+    lines.push(`Statements (${statements.length}):`);
+    for (const stmt of statements) {
+      lines.push(`  ${stmt}`);
+    }
+  } else {
+    lines.push("No CREATE TABLE/VIEW/INDEX statements found");
+    lines.push(content.slice(0, 300) + (content.length > 300 ? "..." : ""));
+  }
+  return lines.join("\n");
+}
+function summarizeFallback(content) {
+  const tokenEstimate = Math.ceil(content.length / 4);
+  const head = content.slice(0, 500);
+  const tail = content.length > 700 ? content.slice(-200) : "";
+  const parts = [head];
+  if (tail) {
+    parts.push("...");
+    parts.push(tail);
+  }
+  parts.push(`[~${tokenEstimate} tokens]`);
+  return parts.join("\n");
+}
+
 // src/hook-handlers/ingest.ts
-async function ingestNewMessages(transcriptPath, sessionId, projectPath, conversationStore, summaryStore) {
+async function ingestNewMessages(transcriptPath, sessionId, projectPath, conversationStore, summaryStore, fileStore, largeFileThreshold) {
   if (!transcriptPath) return { messagesIngested: 0 };
   const conversation = conversationStore.getOrCreateConversation(sessionId, projectPath);
   const cursor = summaryStore.getCursor(sessionId) ?? {
@@ -623,17 +872,38 @@ async function ingestNewMessages(transcriptPath, sessionId, projectPath, convers
   if (messages.length === 0) {
     return { messagesIngested: 0 };
   }
+  const threshold = largeFileThreshold ?? 25e3;
   const now = Date.now();
   for (const msg of messages) {
     try {
-      conversationStore.insertMessage({
+      const tokenCount = estimateTokens(msg.content);
+      const inserted = conversationStore.insertMessage({
         conversationId: conversation.id,
         role: msg.role,
         content: msg.content,
-        tokenCount: estimateTokens(msg.content),
+        tokenCount,
         timestamp: msg.timestamp || now,
         metadata: msg.metadata
       });
+      if (fileStore && msg.role === "tool_result" && tokenCount > threshold) {
+        try {
+          const fileType = detectFileType(msg.content);
+          const explorationSummary = generateExplorationSummary(msg.content, fileType);
+          const contentPreview = msg.content.slice(0, 500);
+          fileStore.insertFile({
+            messageId: inserted.id,
+            conversationId: conversation.id,
+            filePath: null,
+            fileType,
+            rawTokenCount: tokenCount,
+            contentPreview,
+            explorationSummary
+          });
+          logger.debug("Large file detected and stored", { messageId: inserted.id, fileType, tokenCount });
+        } catch (fileErr) {
+          logger.warn("Failed to store large file metadata", { fileErr, messageId: inserted.id });
+        }
+      }
     } catch (err) {
       logger.warn("Failed to insert message", { err, role: msg.role });
     }

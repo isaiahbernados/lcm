@@ -149,3 +149,17 @@ export interface ExpandResult {
   truncated: boolean;
   totalTokens: number;
 }
+
+export type FileType = 'json' | 'code' | 'sql' | 'xml' | 'text';
+
+export interface LcmFile {
+  id: string;
+  messageId: string;
+  conversationId: string;
+  filePath: string | null;
+  fileType: FileType;
+  rawTokenCount: number;
+  contentPreview: string;
+  explorationSummary: string | null;
+  createdAt: number;
+}

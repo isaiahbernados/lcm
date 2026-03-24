@@ -26,7 +26,9 @@ async function handler(ctx: HookContext): Promise<HookOutput> {
     input.session_id,
     input.cwd ?? '',
     conversationStore,
-    summaryStore
+    summaryStore,
+    ctx.fileStore,
+    config.largeFileThreshold,
   );
 
   // Granular compaction: summarize every ~granularCompactThreshold tokens

@@ -100,5 +100,21 @@ export function runMigrations(db: Db): void {
       byte_offset INTEGER NOT NULL DEFAULT 0,
       last_timestamp INTEGER NOT NULL DEFAULT 0
     );
+
+    CREATE TABLE IF NOT EXISTS files (
+      id TEXT PRIMARY KEY,
+      message_id TEXT NOT NULL,
+      conversation_id TEXT NOT NULL,
+      file_path TEXT,
+      file_type TEXT NOT NULL DEFAULT 'text',
+      raw_token_count INTEGER NOT NULL,
+      content_preview TEXT NOT NULL,
+      exploration_summary TEXT,
+      created_at INTEGER NOT NULL,
+      FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE,
+      FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_files_conversation_id ON files(conversation_id);
+    CREATE INDEX IF NOT EXISTS idx_files_message_id ON files(message_id);
   `);
 }

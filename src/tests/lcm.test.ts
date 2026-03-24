@@ -1015,3 +1015,280 @@ describe('Summarization', () => {
     expect(resultTokens).toBeLessThanOrEqual(512);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Suite N — FileStore
+// ---------------------------------------------------------------------------
+
+import { FileStore } from '../core/file-store.js';
+
+describe('FileStore', () => {
+  let db: DatabaseSync;
+  let store: FileStore;
+  let convStore: ConversationStore;
+  let convId: string;
+  let msgId: string;
+
+  beforeEach(() => {
+    db = makeDb();
+    store = new FileStore(db);
+    convStore = new ConversationStore(db);
+    const conv = convStore.getOrCreateConversation('session-fs', '/project/fs');
+    convId = conv.id;
+    const msg = convStore.insertMessage({ conversationId: convId, role: 'tool_result', content: 'x'.repeat(100), tokenCount: 25, timestamp: NOW });
+    msgId = msg.id;
+  });
+
+  it('insertFile creates a file with id prefixed file_', () => {
+    const file = store.insertFile({
+      messageId: msgId,
+      conversationId: convId,
+      fileType: 'json',
+      rawTokenCount: 30000,
+      contentPreview: '{"key":"value"}',
+      explorationSummary: '[JSON]\nObject with 1 top-level keys:\n  key: string',
+    });
+
+    expect(file.id).toMatch(/^file_/);
+    expect(file.messageId).toBe(msgId);
+    expect(file.conversationId).toBe(convId);
+    expect(file.fileType).toBe('json');
+    expect(file.rawTokenCount).toBe(30000);
+    expect(file.explorationSummary).toContain('[JSON]');
+    expect(typeof file.createdAt).toBe('number');
+  });
+
+  it('getFile returns the file by id', () => {
+    const inserted = store.insertFile({
+      messageId: msgId,
+      conversationId: convId,
+      fileType: 'code',
+      rawTokenCount: 26000,
+      contentPreview: 'function foo() {}',
+      explorationSummary: '[CODE]\nSignatures (1):\n  function foo()',
+    });
+
+    const fetched = store.getFile(inserted.id);
+    expect(fetched).not.toBeNull();
+    expect(fetched!.id).toBe(inserted.id);
+    expect(fetched!.fileType).toBe('code');
+  });
+
+  it('getFile returns null for unknown id', () => {
+    expect(store.getFile('file_nonexistent')).toBeNull();
+  });
+
+  it('getFilesForConversation returns only files for that conversation', () => {
+    // Second conversation
+    const conv2 = convStore.getOrCreateConversation('session-fs-2', '/proj2');
+    const msg2 = convStore.insertMessage({ conversationId: conv2.id, role: 'tool_result', content: 'y'.repeat(100), tokenCount: 25, timestamp: NOW });
+
+    store.insertFile({ messageId: msgId, conversationId: convId, fileType: 'text', rawTokenCount: 26000, contentPreview: 'abc' });
+    store.insertFile({ messageId: msg2.id, conversationId: conv2.id, fileType: 'sql', rawTokenCount: 27000, contentPreview: 'CREATE TABLE t (id TEXT)' });
+
+    const files1 = store.getFilesForConversation(convId);
+    const files2 = store.getFilesForConversation(conv2.id);
+
+    expect(files1).toHaveLength(1);
+    expect(files1[0]!.conversationId).toBe(convId);
+    expect(files2).toHaveLength(1);
+    expect(files2[0]!.conversationId).toBe(conv2.id);
+  });
+
+  it('updateExplorationSummary changes the summary', () => {
+    const file = store.insertFile({
+      messageId: msgId,
+      conversationId: convId,
+      fileType: 'text',
+      rawTokenCount: 26000,
+      contentPreview: 'hello',
+      explorationSummary: 'old summary',
+    });
+
+    store.updateExplorationSummary(file.id, 'new summary');
+
+    const updated = store.getFile(file.id);
+    expect(updated!.explorationSummary).toBe('new summary');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Suite N+1 — FileAnalyzer
+// ---------------------------------------------------------------------------
+
+import { detectFileType, generateExplorationSummary } from '../core/file-analyzer.js';
+
+describe('FileAnalyzer', () => {
+  describe('detectFileType', () => {
+    it('detects JSON content', () => {
+      expect(detectFileType('{"name":"foo","count":42}')).toBe('json');
+      expect(detectFileType('[1, 2, 3]')).toBe('json');
+    });
+
+    it('detects SQL content', () => {
+      expect(detectFileType('CREATE TABLE users (id TEXT PRIMARY KEY);')).toBe('sql');
+      expect(detectFileType('CREATE VIEW active_users AS SELECT * FROM users;')).toBe('sql');
+      expect(detectFileType('CREATE INDEX idx_name ON users(name);')).toBe('sql');
+    });
+
+    it('detects code content', () => {
+      expect(detectFileType('function hello() { return 42; }')).toBe('code');
+      expect(detectFileType('class MyClass { constructor() {} }')).toBe('code');
+      expect(detectFileType('import { foo } from "bar";\nexport function baz() {}')).toBe('code');
+      expect(detectFileType('def my_func(x):\n  return x + 1')).toBe('code');
+    });
+
+    it('detects XML/HTML content', () => {
+      expect(detectFileType('<root><child>text</child></root>')).toBe('xml');
+      expect(detectFileType('<!DOCTYPE html><html><body></body></html>')).toBe('xml');
+    });
+
+    it('defaults to text for plain content', () => {
+      expect(detectFileType('This is just a plain text document with no special markers.')).toBe('text');
+      expect(detectFileType('some random words without code patterns')).toBe('text');
+    });
+  });
+
+  describe('generateExplorationSummary', () => {
+    it('JSON summary lists top-level keys', () => {
+      const content = JSON.stringify({ name: 'Alice', age: 30, hobbies: ['reading', 'coding'], address: null });
+      const summary = generateExplorationSummary(content, 'json');
+      expect(summary).toContain('[JSON]');
+      expect(summary).toContain('name');
+      expect(summary).toContain('age');
+      expect(summary).toContain('hobbies');
+    });
+
+    it('JSON summary shows array length for array values', () => {
+      const content = JSON.stringify({ items: [1, 2, 3, 4, 5], count: 5 });
+      const summary = generateExplorationSummary(content, 'json');
+      expect(summary).toContain('Array(5)');
+    });
+
+    it('Code summary extracts function signatures', () => {
+      const content = `
+function fetchData(url) { return fetch(url); }
+async function processResult(data) { return data; }
+class DataManager { constructor() {} }
+`;
+      const summary = generateExplorationSummary(content, 'code');
+      expect(summary).toContain('[CODE]');
+      expect(summary).toContain('function fetchData()');
+      expect(summary).toContain('function processResult()');
+      expect(summary).toContain('class DataManager');
+    });
+
+    it('Code summary extracts Python def signatures', () => {
+      const content = `def compute(x, y):\n    return x + y\ndef helper():\n    pass`;
+      const summary = generateExplorationSummary(content, 'code');
+      expect(summary).toContain('[CODE]');
+      expect(summary).toContain('def compute()');
+      expect(summary).toContain('def helper()');
+    });
+
+    it('SQL summary extracts CREATE TABLE statements', () => {
+      const content = `
+CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT);
+CREATE TABLE posts (id TEXT PRIMARY KEY, user_id TEXT);
+CREATE INDEX idx_user ON posts(user_id);
+`;
+      const summary = generateExplorationSummary(content, 'sql');
+      expect(summary).toContain('[SQL]');
+      expect(summary).toContain('CREATE TABLE users');
+      expect(summary).toContain('CREATE TABLE posts');
+      expect(summary).toContain('CREATE INDEX idx_user');
+    });
+
+    it('Fallback summary shows first 500 chars and last 200 chars', () => {
+      const longContent = 'A'.repeat(300) + 'MIDDLE' + 'B'.repeat(600);
+      const summary = generateExplorationSummary(longContent, 'text');
+      expect(summary).toContain('A'.repeat(100));
+      expect(summary).toContain('B'.repeat(100));
+      expect(summary).toContain('...');
+      expect(summary).toContain('tokens');
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Suite N+2 — Ingest Integration (large file detection)
+// ---------------------------------------------------------------------------
+
+import { ingestNewMessages } from '../hook-handlers/ingest.js';
+import { writeFileSync, mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+describe('Ingest large file integration', () => {
+  let db: DatabaseSync;
+  let convStore: ConversationStore;
+  let summaryStore: SummaryStore;
+  let fileStore: FileStore;
+  let transcriptPath: string;
+
+  beforeEach(() => {
+    db = makeDb();
+    convStore = new ConversationStore(db);
+    summaryStore = new SummaryStore(db);
+    fileStore = new FileStore(db);
+
+    // Create a temp transcript file
+    const dir = mkdtempSync(join(tmpdir(), 'lcm-test-'));
+    transcriptPath = join(dir, 'transcript.jsonl');
+  });
+
+  it('stores a file record when a tool_result message exceeds the threshold', async () => {
+    // Build content that exceeds 25000 tokens (~100K chars)
+    const bigJson = JSON.stringify({ data: 'x'.repeat(100_000), metadata: { count: 42, items: [1, 2, 3] } });
+
+    const entry = {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [{ type: 'tool_result', content: bigJson }],
+      },
+      timestamp: new Date(NOW).toISOString(),
+      uuid: 'test-uuid-large',
+    };
+    writeFileSync(transcriptPath, JSON.stringify(entry) + '\n');
+
+    const sessionId = 'session-ingest-large';
+    await ingestNewMessages(transcriptPath, sessionId, '/proj', convStore, summaryStore, fileStore, 25000);
+
+    const conv = convStore.getConversationBySession(sessionId);
+    expect(conv).not.toBeNull();
+
+    const files = fileStore.getFilesForConversation(conv!.id);
+    expect(files.length).toBeGreaterThanOrEqual(1);
+    const f = files[0]!;
+    expect(f.fileType).toBe('json');
+    expect(f.rawTokenCount).toBeGreaterThan(25000);
+    expect(f.explorationSummary).toContain('[JSON]');
+  });
+
+  it('does not store a file record for small tool_result messages', async () => {
+    const smallContent = JSON.stringify({ hello: 'world' });
+    const entry = {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [{ type: 'tool_result', content: smallContent }],
+      },
+      timestamp: new Date(NOW).toISOString(),
+      uuid: 'test-uuid-small',
+    };
+    writeFileSync(transcriptPath, JSON.stringify(entry) + '\n');
+
+    const sessionId = 'session-ingest-small';
+    await ingestNewMessages(transcriptPath, sessionId, '/proj', convStore, summaryStore, fileStore, 25000);
+
+    const conv = convStore.getConversationBySession(sessionId);
+    if (conv) {
+      const files = fileStore.getFilesForConversation(conv.id);
+      // No large files should be stored (small content)
+      for (const f of files) {
+        expect(f.rawTokenCount).toBeGreaterThan(25000);
+      }
+    }
+  });
+});

@@ -18,6 +18,8 @@ export interface LcmConfig {
   useCliSummarizer: boolean;
   /** Number of uncondensed level-0 summaries before triggering DAG condensation into a level-1 summary. Default 5. */
   condensationThreshold: number;
+  /** Token count threshold above which a tool_result message is treated as a large file. Default 25000. */
+  largeFileThreshold: number;
 }
 
 function defaultDbPath(): string {
@@ -34,5 +36,6 @@ export function loadConfig(): LcmConfig {
     granularCompactThreshold: parseInt(process.env['LCM_GRANULAR_THRESHOLD'] ?? '20000', 10),
     useCliSummarizer: (process.env['LCM_USE_CLI'] ?? 'false') !== 'false',
     condensationThreshold: parseInt(process.env['LCM_CONDENSATION_THRESHOLD'] ?? '5', 10),
+    largeFileThreshold: parseInt(process.env['LCM_LARGE_FILE_THRESHOLD'] ?? '25000', 10),
   };
 }
