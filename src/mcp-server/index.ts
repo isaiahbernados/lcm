@@ -2,8 +2,7 @@
 /**
  * LCM MCP Server — stdio transport.
  *
- * Exposes lcm_grep, lcm_describe, lcm_expand, lcm_expand_query,
- * lcm_request_compact, and lcm_store_summary as MCP tools.
+ * Exposes lcm_grep, lcm_describe, lcm_expand, lcm_expand_query as MCP tools.
  *
  * No Anthropic API key required — summarization is done by Claude Code itself.
  */
@@ -32,7 +31,7 @@ async function main() {
   const conversationStore = new ConversationStore(db);
   const summaryStore = new SummaryStore(db);
   const engine = new RetrievalEngine(conversationStore, summaryStore);
-  const toolCtx = { engine, summaryStore, conversationStore };
+  const toolCtx = { engine, conversationStore };
 
   const server = new Server(
     { name: 'lcm', version: '0.1.0' },

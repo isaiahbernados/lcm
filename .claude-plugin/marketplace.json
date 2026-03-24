@@ -9,7 +9,7 @@
       "name": "lcm",
       "source": "./",
       "description": "Preserves every message in SQLite and re-injects context after compaction. Never lose conversation history again.",
-      "version": "0.1.3",
+      "version": "0.1.4",
       "author": {
         "name": "Isaiah"
       },

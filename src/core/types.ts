@@ -125,6 +125,7 @@ export interface GrepResult {
   content: string;
   timestamp: number;
   sequenceNumber: number;
+  coveringSummaryId: string | null;  // summary that covers this message, or null
 }
 
 export interface DescribeResult {

@@ -21177,9 +21177,6 @@ var SummaryStore = class {
     ).all(summaryId);
     return rows.map((r) => r.message_id);
   }
-  updateParentId(summaryId, parentId) {
-    this.db.prepare("UPDATE summaries SET parent_id = ? WHERE id = ?").run(parentId, summaryId);
-  }
   /** Get the highest compacted sequence number for a conversation */
   getMaxCompactedSequence(conversationId) {
     const row = this.db.prepare(
@@ -21255,10 +21252,26 @@ var RetrievalEngine = class {
   /**
    * Full-text or LIKE search across all stored messages.
    */
-  grep(query, conversationId, limit = 50) {
-    const messages = this.conversationStore.search(query, conversationId, limit);
+  grep(query, conversationId, limit = 50, summaryId) {
+    let messages = this.conversationStore.search(query, conversationId, limit);
+    if (summaryId) {
+      const scopeSummary = this.summaryStore.getSummary(summaryId);
+      if (scopeSummary) {
+        messages = messages.filter(
+          (m) => m.conversationId === scopeSummary.conversationId && m.sequenceNumber >= scopeSummary.messageRangeStart && m.sequenceNumber <= scopeSummary.messageRangeEnd
+        );
+      }
+    }
+    const summaryCache = /* @__PURE__ */ new Map();
     return messages.map((m) => {
       const conv = this.conversationStore.getConversation(m.conversationId);
+      if (!summaryCache.has(m.conversationId)) {
+        summaryCache.set(m.conversationId, this.summaryStore.getSummariesForConversation(m.conversationId, 0));
+      }
+      const convSummaries = summaryCache.get(m.conversationId);
+      const covering = convSummaries.find(
+        (s) => s.messageRangeStart <= m.sequenceNumber && s.messageRangeEnd >= m.sequenceNumber
+      );
       return {
         messageId: m.id,
         conversationId: m.conversationId,
@@ -21266,7 +21279,8 @@ var RetrievalEngine = class {
         role: m.role,
         content: m.content,
         timestamp: m.timestamp,
-        sequenceNumber: m.sequenceNumber
+        sequenceNumber: m.sequenceNumber,
+        coveringSummaryId: covering?.id ?? null
       };
     });
   }
@@ -21381,16 +21395,11 @@ var RetrievalEngine = class {
   }
 };
 
-// src/core/transcript-reader.ts
-function estimateTokens(text) {
-  return Math.ceil(text.length / 4);
-}
-
 // src/mcp-server/tools.ts
 var tools = [
   {
     name: "lcm_grep",
-    description: "Search the full conversation history preserved by LCM. Use this when you need to find something from earlier in the conversation that may have been compacted. Returns matching messages with context.",
+    description: "Search the full conversation history preserved by LCM. Returns matching messages grouped by the summary node that currently covers them. Use an optional summary_id to restrict search to a specific summary's scope.",
     inputSchema: {
       type: "object",
       properties: {
@@ -21401,6 +21410,10 @@ var tools = [
         conversation_id: {
           type: "string",
           description: "Limit search to a specific conversation ID (optional)"
+        },
+        summary_id: {
+          type: "string",
+          description: "Restrict search to messages within this summary's scope (optional)"
         },
         limit: {
           type: "number",
@@ -21414,21 +21427,31 @@ var tools = [
     handler(args, { engine }) {
       const query = args["query"];
       const conversationId = args["conversation_id"];
+      const summaryId = args["summary_id"];
       const limit = Math.min(200, Math.max(1, args["limit"] ?? 20));
-      const results = engine.grep(query, conversationId, limit);
+      const results = engine.grep(query, conversationId, limit, summaryId);
       if (results.length === 0) {
         return { found: false, message: `No results found for: ${query}` };
+      }
+      const groups = /* @__PURE__ */ new Map();
+      for (const r of results) {
+        const key = r.coveringSummaryId ?? "__uncovered__";
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(r);
       }
       return {
         found: true,
         count: results.length,
-        results: results.map((r) => ({
-          id: r.messageId,
-          role: r.role,
-          content: r.content.length > 500 ? r.content.slice(0, 500) + "\u2026" : r.content,
-          timestamp: new Date(r.timestamp).toISOString(),
-          sequence: r.sequenceNumber,
-          conversationId: r.conversationId
+        groups: Array.from(groups.entries()).map(([key, matches]) => ({
+          summaryId: key === "__uncovered__" ? null : key,
+          matches: matches.map((r) => ({
+            id: r.messageId,
+            role: r.role,
+            content: r.content.length > 500 ? r.content.slice(0, 500) + "\u2026" : r.content,
+            timestamp: new Date(r.timestamp).toISOString(),
+            sequence: r.sequenceNumber,
+            conversationId: r.conversationId
+          }))
         }))
       };
     }
@@ -21453,48 +21476,6 @@ var tools = [
         return { found: false, message: `No item found with ID: ${id}` };
       }
       return { found: true, ...result };
-    }
-  },
-  {
-    name: "lcm_list_summaries",
-    description: "List all summaries stored for a conversation. Use this to discover summary IDs before calling lcm_describe or lcm_expand. Returns IDs, levels, message ranges, token counts, and content previews.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        conversation_id: {
-          type: "string",
-          description: "The conversation ID to list summaries for"
-        },
-        level: {
-          type: "number",
-          description: "Filter by summary level: 0 = leaf summaries, 1+ = condensed. Omit for all levels."
-        }
-      },
-      required: ["conversation_id"]
-    },
-    handler(args, { summaryStore }) {
-      const conversationId = args["conversation_id"];
-      const level = args["level"];
-      const summaries = summaryStore.getSummariesForConversation(conversationId, level);
-      if (summaries.length === 0) {
-        return {
-          found: false,
-          message: `No summaries found for conversation: ${conversationId}`
-        };
-      }
-      return {
-        found: true,
-        count: summaries.length,
-        summaries: summaries.map((s) => ({
-          id: s.id,
-          level: s.level,
-          parentId: s.parentId,
-          messageRange: `${s.messageRangeStart}\u2013${s.messageRangeEnd}`,
-          tokenCount: s.tokenCount,
-          createdAt: new Date(s.createdAt).toISOString(),
-          preview: s.content.length > 200 ? s.content.slice(0, 200) + "\u2026" : s.content
-        }))
-      };
     }
   },
   {
@@ -21593,111 +21574,6 @@ var tools = [
         }))
       };
     }
-  },
-  {
-    name: "lcm_request_compact",
-    description: "Returns accumulated summaries that are ready to be condensed into a higher-level summary. Call this when you want to compress your stored history. After receiving the summaries, condense them into a single concise summary and call lcm_store_summary with the result.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        conversation_id: {
-          type: "string",
-          description: "Conversation ID to compact (optional \u2014 uses current session if omitted)"
-        },
-        min_summaries: {
-          type: "number",
-          description: "Minimum number of summaries required before compacting (default 4)"
-        }
-      }
-    },
-    handler(args, { summaryStore, conversationStore }) {
-      const conversationId = args["conversation_id"];
-      const minSummaries = args["min_summaries"] ?? 4;
-      let convId = conversationId;
-      if (!convId) {
-        return { ready: false, message: "Provide a conversation_id to compact." };
-      }
-      const leafSummaries = summaryStore.getSummariesForConversation(convId, 0).filter((s) => s.parentId === null);
-      if (leafSummaries.length < minSummaries) {
-        return {
-          ready: false,
-          message: `Only ${leafSummaries.length} leaf summaries exist (need ${minSummaries} to compact).`,
-          summaryCount: leafSummaries.length
-        };
-      }
-      return {
-        ready: true,
-        conversationId: convId,
-        summaryCount: leafSummaries.length,
-        instruction: "Please condense the following summaries into a single concise summary that preserves all key decisions, facts, and context. Then call lcm_store_summary with your condensed result.",
-        summaries: leafSummaries.map((s) => ({
-          id: s.id,
-          level: s.level,
-          messageRange: `${s.messageRangeStart}-${s.messageRangeEnd}`,
-          content: s.content
-        }))
-      };
-    }
-  },
-  {
-    name: "lcm_store_summary",
-    description: "Store a summary you have generated into LCM's persistent memory. Use after lcm_request_compact \u2014 condense the provided summaries and call this with your result.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        conversation_id: {
-          type: "string",
-          description: "The conversation ID this summary belongs to"
-        },
-        content: {
-          type: "string",
-          description: "The summary text you generated"
-        },
-        source_summary_ids: {
-          type: "array",
-          items: { type: "string" },
-          description: "IDs of the summaries you condensed (from lcm_request_compact)"
-        },
-        level: {
-          type: "number",
-          description: "DAG level: 1 = condensed from leaf summaries, 2+ = higher condensation"
-        }
-      },
-      required: ["conversation_id", "content", "source_summary_ids"]
-    },
-    handler(args, { summaryStore }) {
-      const conversationId = args["conversation_id"];
-      const content = args["content"];
-      const sourceSummaryIds = args["source_summary_ids"];
-      const level = args["level"] ?? 1;
-      const sources = sourceSummaryIds.map((id) => summaryStore.getSummary(id)).filter((s) => s !== null);
-      if (sources.length === 0) {
-        return { success: false, message: "No valid source summary IDs found." };
-      }
-      const rangeStart = Math.min(...sources.map((s) => s.messageRangeStart));
-      const rangeEnd = Math.max(...sources.map((s) => s.messageRangeEnd));
-      const stored = summaryStore.insertSummary({
-        conversationId,
-        parentId: null,
-        level,
-        content,
-        tokenCount: estimateTokens(content),
-        messageRangeStart: rangeStart,
-        messageRangeEnd: rangeEnd,
-        metadata: { sourceSummaryIds }
-      });
-      for (const sourceId of sourceSummaryIds) {
-        summaryStore.updateParentId(sourceId, stored.id);
-      }
-      return {
-        success: true,
-        summaryId: stored.id,
-        level: stored.level,
-        tokenCount: stored.tokenCount,
-        messageRange: `${rangeStart}-${rangeEnd}`,
-        message: `Summary stored as ${stored.id}. It will be injected into context after the next compaction.`
-      };
-    }
   }
 ];
 
@@ -21742,7 +21618,7 @@ async function main() {
   const conversationStore = new ConversationStore(db);
   const summaryStore = new SummaryStore(db);
   const engine = new RetrievalEngine(conversationStore, summaryStore);
-  const toolCtx = { engine, summaryStore, conversationStore };
+  const toolCtx = { engine, conversationStore };
   const server = new Server(
     { name: "lcm", version: "0.1.0" },
     { capabilities: { tools: {} } }

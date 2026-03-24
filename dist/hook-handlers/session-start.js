@@ -370,9 +370,6 @@ var SummaryStore = class {
     ).all(summaryId);
     return rows.map((r) => r.message_id);
   }
-  updateParentId(summaryId, parentId) {
-    this.db.prepare("UPDATE summaries SET parent_id = ? WHERE id = ?").run(parentId, summaryId);
-  }
   /** Get the highest compacted sequence number for a conversation */
   getMaxCompactedSequence(conversationId) {
     const row = this.db.prepare(

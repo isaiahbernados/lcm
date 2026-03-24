@@ -354,33 +354,6 @@ describe('SummaryStore', () => {
     expect(totalTokens).toBeLessThanOrEqual(15);
   });
 
-  it('updateParentId(summaryId, parentId) updates the row', () => {
-    const parent = store.insertSummary({
-      conversationId: convId,
-      parentId: null,
-      level: 1,
-      content: 'Parent',
-      tokenCount: 10,
-      messageRangeStart: 0,
-      messageRangeEnd: 20,
-    });
-    const child = store.insertSummary({
-      conversationId: convId,
-      parentId: null,
-      level: 0,
-      content: 'Child (no parent yet)',
-      tokenCount: 5,
-      messageRangeStart: 0,
-      messageRangeEnd: 9,
-    });
-
-    // Method being added in parallel — test serves as spec; will pass once merged
-    store.updateParentId(child.id, parent.id);
-
-    const updated = store.getSummary(child.id);
-    expect(updated).not.toBeNull();
-    expect(updated!.parentId).toBe(parent.id);
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -419,6 +392,7 @@ describe('RetrievalEngine', () => {
     expect(results[0]!.content).toContain('refactor');
     expect(typeof results[0]!.sequenceNumber).toBe('number');
     expect(typeof results[0]!.timestamp).toBe('number');
+    expect(results[0]!.coveringSummaryId).toBeNull();
   });
 
   it('grep(query) returns empty array when no matches', () => {
@@ -427,6 +401,57 @@ describe('RetrievalEngine', () => {
     const results = engine.grep('xyzzy_no_match_expected');
 
     expect(results).toEqual([]);
+  });
+
+  it('grep(query) includes coveringSummaryId when a summary covers the message', () => {
+    const m0 = convStore.insertMessage({ conversationId: convId, role: 'user', content: 'covered search term alpha', tokenCount: 5, timestamp: NOW });
+    const m1 = convStore.insertMessage({ conversationId: convId, role: 'assistant', content: 'response to alpha', tokenCount: 5, timestamp: NOW + 1 });
+
+    const summary = summaryStore.insertSummary({
+      conversationId: convId,
+      parentId: null,
+      level: 0,
+      content: 'Summary of alpha discussion.',
+      tokenCount: 10,
+      messageRangeStart: m0.sequenceNumber,
+      messageRangeEnd: m1.sequenceNumber,
+    });
+
+    const results = engine.grep('alpha');
+
+    expect(results.length).toBeGreaterThanOrEqual(1);
+    const covered = results.find((r) => r.messageId === m0.id);
+    expect(covered).toBeDefined();
+    expect(covered!.coveringSummaryId).toBe(summary.id);
+  });
+
+  it('grep(query, undefined, 50, summaryId) restricts results to messages within summary scope', () => {
+    // Insert messages at seq 0-3
+    const m0 = convStore.insertMessage({ conversationId: convId, role: 'user', content: 'scoped keyword beta', tokenCount: 3, timestamp: NOW });
+    const m1 = convStore.insertMessage({ conversationId: convId, role: 'assistant', content: 'reply with beta', tokenCount: 3, timestamp: NOW + 1 });
+    const m2 = convStore.insertMessage({ conversationId: convId, role: 'user', content: 'another beta mention outside', tokenCount: 3, timestamp: NOW + 2 });
+    const m3 = convStore.insertMessage({ conversationId: convId, role: 'assistant', content: 'no keyword here', tokenCount: 3, timestamp: NOW + 3 });
+
+    // Summary covers only m0 and m1
+    const summary = summaryStore.insertSummary({
+      conversationId: convId,
+      parentId: null,
+      level: 0,
+      content: 'Summary covering first two.',
+      tokenCount: 10,
+      messageRangeStart: m0.sequenceNumber,
+      messageRangeEnd: m1.sequenceNumber,
+    });
+
+    // Search with summary_id filter
+    const results = engine.grep('beta', undefined, 50, summary.id);
+
+    // Only m0 and m1 match "beta" within the summary scope; m2 is outside
+    expect(results.length).toBe(2);
+    const ids = results.map((r) => r.messageId);
+    expect(ids).toContain(m0.id);
+    expect(ids).toContain(m1.id);
+    expect(ids).not.toContain(m2.id);
   });
 
   it('describe("sum_...") returns summary metadata with type "summary"', () => {
