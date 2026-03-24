@@ -21253,14 +21253,21 @@ var RetrievalEngine = class {
    * Full-text or LIKE search across all stored messages.
    */
   grep(query, conversationId, limit = 50, summaryId) {
-    let messages = this.conversationStore.search(query, conversationId, limit);
+    let searchConvId = conversationId;
+    let searchLimit = limit;
+    let scopeSummary = null;
     if (summaryId) {
-      const scopeSummary = this.summaryStore.getSummary(summaryId);
+      scopeSummary = this.summaryStore.getSummary(summaryId);
       if (scopeSummary) {
-        messages = messages.filter(
-          (m) => m.conversationId === scopeSummary.conversationId && m.sequenceNumber >= scopeSummary.messageRangeStart && m.sequenceNumber <= scopeSummary.messageRangeEnd
-        );
+        searchConvId = searchConvId ?? scopeSummary.conversationId;
+        searchLimit = Math.max(limit * 5, 200);
       }
+    }
+    let messages = this.conversationStore.search(query, searchConvId, searchLimit);
+    if (scopeSummary) {
+      messages = messages.filter(
+        (m) => m.conversationId === scopeSummary.conversationId && m.sequenceNumber >= scopeSummary.messageRangeStart && m.sequenceNumber <= scopeSummary.messageRangeEnd
+      ).slice(0, limit);
     }
     const summaryCache = /* @__PURE__ */ new Map();
     return messages.map((m) => {
