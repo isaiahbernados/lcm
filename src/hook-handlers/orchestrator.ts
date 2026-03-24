@@ -10,6 +10,7 @@ import { runMigrations } from '../db/migration.js';
 import { loadConfig } from '../db/config.js';
 import { ConversationStore } from '../core/conversation-store.js';
 import { SummaryStore } from '../core/summary-store.js';
+import { FileStore } from '../core/file-store.js';
 import { logger } from '../utils/logger.js';
 import type { HookInput, HookOutput } from '../core/types.js';
 
@@ -17,6 +18,7 @@ export interface HookContext {
   input: HookInput;
   conversationStore: ConversationStore;
   summaryStore: SummaryStore;
+  fileStore: FileStore;
   config: ReturnType<typeof loadConfig>;
 }
 
@@ -53,8 +55,9 @@ export async function runHook(handler: HookHandler): Promise<void> {
 
   const conversationStore = new ConversationStore(db);
   const summaryStore = new SummaryStore(db);
+  const fileStore = new FileStore(db);
 
-  const ctx: HookContext = { input, conversationStore, summaryStore, config };
+  const ctx: HookContext = { input, conversationStore, summaryStore, fileStore, config };
 
   let output: HookOutput = {};
   try {

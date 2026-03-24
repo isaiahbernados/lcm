@@ -20,6 +20,7 @@ import { runMigrations } from '../db/migration.js';
 import { loadConfig } from '../db/config.js';
 import { ConversationStore } from '../core/conversation-store.js';
 import { SummaryStore } from '../core/summary-store.js';
+import { FileStore } from '../core/file-store.js';
 import { RetrievalEngine } from '../core/retrieval-engine.js';
 import { tools } from './tools.js';
 import { logger } from '../utils/logger.js';
@@ -31,8 +32,9 @@ async function main() {
 
   const conversationStore = new ConversationStore(db);
   const summaryStore = new SummaryStore(db);
+  const fileStore = new FileStore(db);
   const engine = new RetrievalEngine(conversationStore, summaryStore);
-  const toolCtx = { engine, conversationStore, config };
+  const toolCtx = { engine, conversationStore, config, fileStore };
 
   const server = new Server(
     { name: 'lcm', version: '0.1.0' },

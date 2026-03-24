@@ -2,7 +2,7 @@
   "name": "lcm",
   "displayName": "Lossless Context Management",
   "description": "Preserves every message in SQLite and re-injects context after compaction. Never lose conversation history again.",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "author": {
     "name": "Isaiah",
     "url": "https://github.com/isaiahbernados"

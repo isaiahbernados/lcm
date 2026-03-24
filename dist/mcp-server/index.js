@@ -20926,6 +20926,22 @@ function runMigrations(db) {
       byte_offset INTEGER NOT NULL DEFAULT 0,
       last_timestamp INTEGER NOT NULL DEFAULT 0
     );
+
+    CREATE TABLE IF NOT EXISTS files (
+      id TEXT PRIMARY KEY,
+      message_id TEXT NOT NULL,
+      conversation_id TEXT NOT NULL,
+      file_path TEXT,
+      file_type TEXT NOT NULL DEFAULT 'text',
+      raw_token_count INTEGER NOT NULL,
+      content_preview TEXT NOT NULL,
+      exploration_summary TEXT,
+      created_at INTEGER NOT NULL,
+      FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE,
+      FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_files_conversation_id ON files(conversation_id);
+    CREATE INDEX IF NOT EXISTS idx_files_message_id ON files(message_id);
   `);
 }
 
@@ -20944,7 +20960,8 @@ function loadConfig() {
     anthropicApiKey: process.env["LCM_ANTHROPIC_API_KEY"] ?? process.env["ANTHROPIC_API_KEY"] ?? null,
     granularCompactThreshold: parseInt(process.env["LCM_GRANULAR_THRESHOLD"] ?? "20000", 10),
     useCliSummarizer: (process.env["LCM_USE_CLI"] ?? "false") !== "false",
-    condensationThreshold: parseInt(process.env["LCM_CONDENSATION_THRESHOLD"] ?? "5", 10)
+    condensationThreshold: parseInt(process.env["LCM_CONDENSATION_THRESHOLD"] ?? "5", 10),
+    largeFileThreshold: parseInt(process.env["LCM_LARGE_FILE_THRESHOLD"] ?? "25000", 10)
   };
 }
 
@@ -21252,6 +21269,73 @@ var SummaryStore = class {
          byte_offset = excluded.byte_offset,
          last_timestamp = excluded.last_timestamp`
     ).run(cursor.sessionId, cursor.byteOffset, cursor.lastTimestamp);
+  }
+};
+
+// src/core/file-store.ts
+import { randomUUID as randomUUID3 } from "node:crypto";
+function rowToFile(row) {
+  return {
+    id: row.id,
+    messageId: row.message_id,
+    conversationId: row.conversation_id,
+    filePath: row.file_path,
+    fileType: row.file_type,
+    rawTokenCount: row.raw_token_count,
+    contentPreview: row.content_preview,
+    explorationSummary: row.exploration_summary,
+    createdAt: row.created_at
+  };
+}
+var FileStore = class {
+  constructor(db) {
+    this.db = db;
+  }
+  insertFile(params) {
+    const id = `file_${randomUUID3()}`;
+    const now = Date.now();
+    this.db.prepare(
+      `INSERT INTO files (id, message_id, conversation_id, file_path, file_type, raw_token_count, content_preview, exploration_summary, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      id,
+      params.messageId,
+      params.conversationId,
+      params.filePath ?? null,
+      params.fileType,
+      params.rawTokenCount,
+      params.contentPreview,
+      params.explorationSummary ?? null,
+      now
+    );
+    return {
+      id,
+      messageId: params.messageId,
+      conversationId: params.conversationId,
+      filePath: params.filePath ?? null,
+      fileType: params.fileType,
+      rawTokenCount: params.rawTokenCount,
+      contentPreview: params.contentPreview,
+      explorationSummary: params.explorationSummary ?? null,
+      createdAt: now
+    };
+  }
+  getFile(fileId) {
+    const row = this.db.prepare(
+      "SELECT * FROM files WHERE id = ?"
+    ).get(fileId);
+    return row ? rowToFile(row) : null;
+  }
+  getFilesForConversation(conversationId) {
+    const rows = this.db.prepare(
+      "SELECT * FROM files WHERE conversation_id = ? ORDER BY created_at ASC"
+    ).all(conversationId);
+    return rows.map(rowToFile);
+  }
+  updateExplorationSummary(fileId, summary) {
+    this.db.prepare(
+      "UPDATE files SET exploration_summary = ? WHERE id = ?"
+    ).run(summary, fileId);
   }
 };
 
@@ -25359,7 +25443,16 @@ Respond with valid JSON only. No markdown, no explanation.`;
                 }
               ]
             });
-            responseText = extractText(retryResponse);
+            const retryText = extractText(retryResponse);
+            const retryParsed = tryParseJson(retryText);
+            if (retryParsed === null) {
+              throw new Error(`Retry response was not valid JSON`);
+            }
+            const retryValidationError = validateSchema(retryParsed, outputSchema);
+            if (retryValidationError !== null) {
+              throw new Error(`Retry response failed schema validation: ${retryValidationError}`);
+            }
+            responseText = retryText;
           }
         } else {
           const retryResponse = await client.messages.create({
@@ -25374,7 +25467,16 @@ Respond with valid JSON only. No markdown, no explanation.`;
               }
             ]
           });
-          responseText = extractText(retryResponse);
+          const retryText = extractText(retryResponse);
+          const retryParsed = tryParseJson(retryText);
+          if (retryParsed === null) {
+            throw new Error(`Retry response was not valid JSON`);
+          }
+          const retryValidationError = validateSchema(retryParsed, outputSchema);
+          if (retryValidationError !== null) {
+            throw new Error(`Retry response failed schema validation: ${retryValidationError}`);
+          }
+          responseText = retryText;
         }
       } else {
         const response = await client.messages.create({
@@ -25427,7 +25529,6 @@ function tryParseJson(text) {
 }
 
 // src/mcp-server/tools.ts
-import os2 from "node:os";
 import path4 from "node:path";
 var tools = [
   {
@@ -25652,7 +25753,7 @@ var tools = [
       }
       const inputPath = args["input_path"];
       const promptTemplate = args["prompt_template"];
-      const outputPath = args["output_path"] ?? path4.join(os2.tmpdir(), path4.basename(inputPath, path4.extname(inputPath)) + ".out.jsonl");
+      const outputPath = args["output_path"] ?? path4.join(path4.dirname(inputPath), path4.basename(inputPath, path4.extname(inputPath)) + ".out.jsonl");
       const model = args["model"];
       const maxConcurrency = args["max_concurrency"];
       const outputSchema = args["output_schema"];
@@ -25666,14 +25767,62 @@ var tools = [
         apiKey
       });
     }
+  },
+  {
+    name: "lcm_files",
+    description: "List and query large files detected during conversation. Returns exploration summaries \u2014 structural overviews of files that were too large to keep in context.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        file_id: {
+          type: "string",
+          description: "Return details for a specific file by its ID (file_...)"
+        },
+        conversation_id: {
+          type: "string",
+          description: "List all large files detected in a specific conversation"
+        },
+        query: {
+          type: "string",
+          description: "Search file paths by simple string match"
+        }
+      }
+    },
+    handler(args, { fileStore }) {
+      const fileId = args["file_id"];
+      const conversationId = args["conversation_id"];
+      const query = args["query"];
+      if (fileId) {
+        const file2 = fileStore.getFile(fileId);
+        if (!file2) {
+          return { found: false, message: `No file found with ID: ${fileId}` };
+        }
+        return { found: true, file: file2 };
+      }
+      if (conversationId) {
+        const files = fileStore.getFilesForConversation(conversationId);
+        return {
+          found: files.length > 0,
+          count: files.length,
+          files
+        };
+      }
+      if (query) {
+        return {
+          found: false,
+          message: "To search by query, please also provide a conversation_id"
+        };
+      }
+      return { found: false, message: "Provide file_id, conversation_id, or query" };
+    }
   }
 ];
 
 // src/utils/logger.ts
 import fs3 from "node:fs";
 import path5 from "node:path";
-import os3 from "node:os";
-var logFile = process.env["LCM_LOG_FILE"] ?? path5.join(os3.homedir(), ".lcm", "lcm.log");
+import os2 from "node:os";
+var logFile = process.env["LCM_LOG_FILE"] ?? path5.join(os2.homedir(), ".lcm", "lcm.log");
 var _logFd = null;
 function getLogFd() {
   if (_logFd !== null) return _logFd;
@@ -25709,8 +25858,9 @@ async function main() {
   runMigrations(db);
   const conversationStore = new ConversationStore(db);
   const summaryStore = new SummaryStore(db);
+  const fileStore = new FileStore(db);
   const engine = new RetrievalEngine(conversationStore, summaryStore);
-  const toolCtx = { engine, conversationStore, config: config2 };
+  const toolCtx = { engine, conversationStore, config: config2, fileStore };
   const server = new Server(
     { name: "lcm", version: "0.1.0" },
     { capabilities: { tools: {} } }

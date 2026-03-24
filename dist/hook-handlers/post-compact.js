@@ -119,6 +119,22 @@ function runMigrations(db) {
       byte_offset INTEGER NOT NULL DEFAULT 0,
       last_timestamp INTEGER NOT NULL DEFAULT 0
     );
+
+    CREATE TABLE IF NOT EXISTS files (
+      id TEXT PRIMARY KEY,
+      message_id TEXT NOT NULL,
+      conversation_id TEXT NOT NULL,
+      file_path TEXT,
+      file_type TEXT NOT NULL DEFAULT 'text',
+      raw_token_count INTEGER NOT NULL,
+      content_preview TEXT NOT NULL,
+      exploration_summary TEXT,
+      created_at INTEGER NOT NULL,
+      FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE,
+      FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_files_conversation_id ON files(conversation_id);
+    CREATE INDEX IF NOT EXISTS idx_files_message_id ON files(message_id);
   `);
 }
 
@@ -136,7 +152,9 @@ function loadConfig() {
     enabled: (process.env["LCM_ENABLED"] ?? "true") !== "false",
     anthropicApiKey: process.env["LCM_ANTHROPIC_API_KEY"] ?? process.env["ANTHROPIC_API_KEY"] ?? null,
     granularCompactThreshold: parseInt(process.env["LCM_GRANULAR_THRESHOLD"] ?? "20000", 10),
-    useCliSummarizer: (process.env["LCM_USE_CLI"] ?? "false") !== "false"
+    useCliSummarizer: (process.env["LCM_USE_CLI"] ?? "false") !== "false",
+    condensationThreshold: parseInt(process.env["LCM_CONDENSATION_THRESHOLD"] ?? "5", 10),
+    largeFileThreshold: parseInt(process.env["LCM_LARGE_FILE_THRESHOLD"] ?? "25000", 10)
   };
 }
 
@@ -370,6 +388,17 @@ var SummaryStore = class {
     ).all(summaryId);
     return rows.map((r) => r.message_id);
   }
+  /** Update a summary's parentId (used by condensation to link children to their parent). */
+  updateParentId(summaryId, parentId) {
+    this.db.prepare("UPDATE summaries SET parent_id = ? WHERE id = ?").run(parentId, summaryId);
+  }
+  /** Get uncondensed summaries at a given level (parent_id IS NULL). */
+  getUncondensedSummaries(conversationId, level) {
+    const rows = this.db.prepare(
+      "SELECT * FROM summaries WHERE conversation_id = ? AND level = ? AND parent_id IS NULL ORDER BY message_range_start ASC"
+    ).all(conversationId, level);
+    return rows.map(rowToSummary);
+  }
   /** Get the highest compacted sequence number for a conversation */
   getMaxCompactedSequence(conversationId) {
     const row = this.db.prepare(
@@ -436,6 +465,73 @@ var SummaryStore = class {
   }
 };
 
+// src/core/file-store.ts
+import { randomUUID as randomUUID3 } from "node:crypto";
+function rowToFile(row) {
+  return {
+    id: row.id,
+    messageId: row.message_id,
+    conversationId: row.conversation_id,
+    filePath: row.file_path,
+    fileType: row.file_type,
+    rawTokenCount: row.raw_token_count,
+    contentPreview: row.content_preview,
+    explorationSummary: row.exploration_summary,
+    createdAt: row.created_at
+  };
+}
+var FileStore = class {
+  constructor(db) {
+    this.db = db;
+  }
+  insertFile(params) {
+    const id = `file_${randomUUID3()}`;
+    const now = Date.now();
+    this.db.prepare(
+      `INSERT INTO files (id, message_id, conversation_id, file_path, file_type, raw_token_count, content_preview, exploration_summary, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      id,
+      params.messageId,
+      params.conversationId,
+      params.filePath ?? null,
+      params.fileType,
+      params.rawTokenCount,
+      params.contentPreview,
+      params.explorationSummary ?? null,
+      now
+    );
+    return {
+      id,
+      messageId: params.messageId,
+      conversationId: params.conversationId,
+      filePath: params.filePath ?? null,
+      fileType: params.fileType,
+      rawTokenCount: params.rawTokenCount,
+      contentPreview: params.contentPreview,
+      explorationSummary: params.explorationSummary ?? null,
+      createdAt: now
+    };
+  }
+  getFile(fileId) {
+    const row = this.db.prepare(
+      "SELECT * FROM files WHERE id = ?"
+    ).get(fileId);
+    return row ? rowToFile(row) : null;
+  }
+  getFilesForConversation(conversationId) {
+    const rows = this.db.prepare(
+      "SELECT * FROM files WHERE conversation_id = ? ORDER BY created_at ASC"
+    ).all(conversationId);
+    return rows.map(rowToFile);
+  }
+  updateExplorationSummary(fileId, summary) {
+    this.db.prepare(
+      "UPDATE files SET exploration_summary = ? WHERE id = ?"
+    ).run(summary, fileId);
+  }
+};
+
 // src/utils/logger.ts
 import fs2 from "node:fs";
 import path3 from "node:path";
@@ -498,7 +594,8 @@ async function runHook(handler2) {
   }
   const conversationStore = new ConversationStore(db);
   const summaryStore = new SummaryStore(db);
-  const ctx = { input, conversationStore, summaryStore, config };
+  const fileStore = new FileStore(db);
+  const ctx = { input, conversationStore, summaryStore, fileStore, config };
   let output = {};
   try {
     output = await handler2(ctx);
@@ -574,7 +671,7 @@ async function handler(ctx) {
     const rangeEnd = Math.max(0, msgCount - 1);
     const existingMax = summaryStore.getMaxCompactedSequence(conversation.id);
     const rangeStart = Math.max(0, existingMax + 1);
-    summaryStore.insertSummary({
+    const summary = summaryStore.insertSummary({
       conversationId: conversation.id,
       parentId: null,
       level: 0,
@@ -583,6 +680,10 @@ async function handler(ctx) {
       messageRangeStart: rangeStart,
       messageRangeEnd: rangeEnd
     });
+    const msgsInRange = conversationStore.getMessages(conversation.id, rangeStart, rangeEnd);
+    if (msgsInRange.length > 0) {
+      summaryStore.linkSummaryToMessages(summary.id, msgsInRange.map((m) => m.id));
+    }
     logger.info("PostCompact: stored Claude-generated summary", {
       tokens: estimateTokens(compactSummary),
       range: `${rangeStart}-${rangeEnd}`

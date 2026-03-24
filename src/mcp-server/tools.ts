@@ -5,14 +5,15 @@
 import type { RetrievalEngine } from '../core/retrieval-engine.js';
 import type { ConversationStore } from '../core/conversation-store.js';
 import type { LcmConfig } from '../db/config.js';
+import type { FileStore } from '../core/file-store.js';
 import { llmMap } from '../core/llm-map.js';
-import os from 'node:os';
 import path from 'node:path';
 
 export interface ToolContext {
   engine: RetrievalEngine;
   conversationStore: ConversationStore;
   config: LcmConfig;
+  fileStore: FileStore;
 }
 
 export interface ToolDefinition {
@@ -277,6 +278,60 @@ export const tools: ToolDefinition[] = [
         outputSchema,
         apiKey,
       });
+    },
+  },
+
+  {
+    name: 'lcm_files',
+    description:
+      'List and query large files detected during conversation. Returns exploration summaries — structural overviews of files that were too large to keep in context.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        file_id: {
+          type: 'string',
+          description: 'Return details for a specific file by its ID (file_...)',
+        },
+        conversation_id: {
+          type: 'string',
+          description: 'List all large files detected in a specific conversation',
+        },
+        query: {
+          type: 'string',
+          description: 'Search file paths by simple string match',
+        },
+      },
+    },
+    handler(args, { fileStore }) {
+      const fileId = args['file_id'] as string | undefined;
+      const conversationId = args['conversation_id'] as string | undefined;
+      const query = args['query'] as string | undefined;
+
+      if (fileId) {
+        const file = fileStore.getFile(fileId);
+        if (!file) {
+          return { found: false, message: `No file found with ID: ${fileId}` };
+        }
+        return { found: true, file };
+      }
+
+      if (conversationId) {
+        const files = fileStore.getFilesForConversation(conversationId);
+        return {
+          found: files.length > 0,
+          count: files.length,
+          files,
+        };
+      }
+
+      if (query) {
+        return {
+          found: false,
+          message: 'To search by query, please also provide a conversation_id',
+        };
+      }
+
+      return { found: false, message: 'Provide file_id, conversation_id, or query' };
     },
   },
 
