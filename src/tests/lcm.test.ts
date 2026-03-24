@@ -343,6 +343,48 @@ describe('SummaryStore', () => {
     expect(store.getMaxCompactedSequence(convId)).toBe(19);
   });
 
+  it('linkSummaryToMessages creates entries in summary_messages table', () => {
+    // Create messages
+    const conv = convStore.getOrCreateConversation('session-link', '/proj');
+    const m0 = convStore.insertMessage({ conversationId: conv.id, role: 'user', content: 'msg0', tokenCount: 5, timestamp: NOW });
+    const m1 = convStore.insertMessage({ conversationId: conv.id, role: 'assistant', content: 'msg1', tokenCount: 5, timestamp: NOW + 1 });
+
+    // Create summary
+    const summary = store.insertSummary({
+      conversationId: conv.id,
+      parentId: null,
+      level: 0,
+      content: 'Summary of msg0 and msg1',
+      tokenCount: 10,
+      messageRangeStart: m0.sequenceNumber,
+      messageRangeEnd: m1.sequenceNumber,
+    });
+
+    // Link
+    store.linkSummaryToMessages(summary.id, [m0.id, m1.id]);
+
+    // Verify via getMessageIdsForSummary
+    const linkedIds = store.getMessageIdsForSummary(summary.id);
+    expect(linkedIds).toHaveLength(2);
+    expect(linkedIds).toContain(m0.id);
+    expect(linkedIds).toContain(m1.id);
+  });
+
+  it('getMessageIdsForSummary returns empty array when no links exist', () => {
+    const summary = store.insertSummary({
+      conversationId: convId,
+      parentId: null,
+      level: 0,
+      content: 'Unlinked summary',
+      tokenCount: 5,
+      messageRangeStart: 0,
+      messageRangeEnd: 2,
+    });
+
+    const ids = store.getMessageIdsForSummary(summary.id);
+    expect(ids).toHaveLength(0);
+  });
+
   it('getTopSummaries(convId, budget) respects token budget', () => {
     // Insert three summaries; combined token cost exceeds budget of 15
     store.insertSummary({ conversationId: convId, parentId: null, level: 0, content: 'S1', tokenCount: 8, messageRangeStart: 0, messageRangeEnd: 5 });

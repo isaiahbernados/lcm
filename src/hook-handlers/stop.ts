@@ -47,7 +47,7 @@ async function handler(ctx: HookContext): Promise<HookOutput> {
           ? await summarizeWithEscalation(pending, config.anthropicApiKey)
           : await summarizeWithCLIEscalation(pending);
 
-        summaryStore.insertSummary({
+        const summary = summaryStore.insertSummary({
           conversationId: conversation.id,
           parentId: null,
           level: 0,
@@ -56,6 +56,9 @@ async function handler(ctx: HookContext): Promise<HookOutput> {
           messageRangeStart: lastSeq + 1,
           messageRangeEnd: maxSeq,
         });
+
+        // Link summary to the specific messages it covers
+        summaryStore.linkSummaryToMessages(summary.id, pending.map(m => m.id));
 
         logger.info('Stop: granular summary stored', { range: `${lastSeq + 1}-${maxSeq}`, mode, escalationLevel });
       }
