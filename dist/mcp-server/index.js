@@ -21387,13 +21387,15 @@ var RetrievalEngine = class {
       } else {
         const msg = this.conversationStore.getMessage(match.messageId);
         if (msg) {
+          const perResultCap = Math.floor(tokenCap / maxResults);
+          const truncated = msg.tokenCount > perResultCap;
           results.push({
             summaryId: null,
             isFallback: true,
-            messages: [msg],
+            messages: truncated ? [] : [msg],
             childSummaries: [],
-            truncated: false,
-            totalTokens: msg.tokenCount
+            truncated,
+            totalTokens: truncated ? 0 : msg.tokenCount
           });
         }
       }
