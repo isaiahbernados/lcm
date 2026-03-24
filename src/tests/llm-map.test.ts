@@ -269,4 +269,67 @@ describe('llmMap', () => {
     expect(result.succeeded).toBe(1);
     expect(mockCreate).toHaveBeenCalledTimes(2);
   });
+
+  it('records line as failed when retry also returns invalid JSON', async () => {
+    inputPath = writeTempJsonl(['input']);
+
+    // Both attempts return invalid JSON
+    mockCreate
+      .mockResolvedValueOnce(makeResponse('not json'))
+      .mockResolvedValueOnce(makeResponse('still not json'));
+
+    const result = await llmMap({
+      inputPath,
+      outputPath,
+      promptTemplate: '{{line}}',
+      apiKey: 'test-key',
+      outputSchema: { type: 'object' },
+    });
+
+    expect(result.succeeded).toBe(0);
+    expect(result.failed).toBe(1);
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0].error).toContain('not valid JSON');
+
+    const outputRows = readOutputJsonl(outputPath);
+    expect(outputRows).toHaveLength(1);
+    expect(outputRows[0].output).toBeNull();
+    expect(outputRows[0].error).toContain('not valid JSON');
+  });
+
+  it('records line as failed when retry response fails schema validation', async () => {
+    inputPath = writeTempJsonl(['input']);
+
+    const schema = {
+      type: 'object',
+      required: ['name', 'value'],
+      properties: {
+        name: { type: 'string' },
+        value: { type: 'number' },
+      },
+    };
+
+    // First response missing 'value', retry also missing 'value'
+    mockCreate
+      .mockResolvedValueOnce(makeResponse('{"name":"test"}'))
+      .mockResolvedValueOnce(makeResponse('{"name":"still-missing-value"}'));
+
+    const result = await llmMap({
+      inputPath,
+      outputPath,
+      promptTemplate: '{{line}}',
+      apiKey: 'test-key',
+      outputSchema: schema,
+    });
+
+    expect(result.succeeded).toBe(0);
+    expect(result.failed).toBe(1);
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0].error).toContain('schema validation');
+
+    const outputRows = readOutputJsonl(outputPath);
+    expect(outputRows).toHaveLength(1);
+    expect(outputRows[0].output).toBeNull();
+    expect(outputRows[0].error).toContain('schema validation');
+  });
 });

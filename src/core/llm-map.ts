@@ -165,7 +165,16 @@ export async function llmMap(options: LlmMapOptions): Promise<LlmMapResult> {
                 },
               ],
             });
-            responseText = extractText(retryResponse);
+            const retryText = extractText(retryResponse);
+            const retryParsed = tryParseJson(retryText);
+            if (retryParsed === null) {
+              throw new Error(`Retry response was not valid JSON`);
+            }
+            const retryValidationError = validateSchema(retryParsed, outputSchema);
+            if (retryValidationError !== null) {
+              throw new Error(`Retry response failed schema validation: ${retryValidationError}`);
+            }
+            responseText = retryText;
           }
         } else {
           // First response wasn't valid JSON, retry
@@ -181,7 +190,16 @@ export async function llmMap(options: LlmMapOptions): Promise<LlmMapResult> {
               },
             ],
           });
-          responseText = extractText(retryResponse);
+          const retryText = extractText(retryResponse);
+          const retryParsed = tryParseJson(retryText);
+          if (retryParsed === null) {
+            throw new Error(`Retry response was not valid JSON`);
+          }
+          const retryValidationError = validateSchema(retryParsed, outputSchema);
+          if (retryValidationError !== null) {
+            throw new Error(`Retry response failed schema validation: ${retryValidationError}`);
+          }
+          responseText = retryText;
         }
       } else {
         const response = await client.messages.create({

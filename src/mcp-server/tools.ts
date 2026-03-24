@@ -263,7 +263,7 @@ export const tools: ToolDefinition[] = [
       const promptTemplate = args['prompt_template'] as string;
       const outputPath =
         (args['output_path'] as string | undefined) ??
-        path.join(os.tmpdir(), path.basename(inputPath, path.extname(inputPath)) + '.out.jsonl');
+        path.join(path.dirname(inputPath), path.basename(inputPath, path.extname(inputPath)) + '.out.jsonl');
       const model = args['model'] as string | undefined;
       const maxConcurrency = args['max_concurrency'] as number | undefined;
       const outputSchema = args['output_schema'] as Record<string, unknown> | undefined;

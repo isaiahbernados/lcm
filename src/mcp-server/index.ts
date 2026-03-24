@@ -4,7 +4,8 @@
  *
  * Exposes lcm_grep, lcm_describe, lcm_expand, lcm_expand_query as MCP tools.
  *
- * No Anthropic API key required — summarization is done by Claude Code itself.
+ * No Anthropic API key required for most tools — summarization is done by Claude Code itself.
+ * An Anthropic API key is required only for lcm_llm_map (set LCM_ANTHROPIC_API_KEY or ANTHROPIC_API_KEY).
  */
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
