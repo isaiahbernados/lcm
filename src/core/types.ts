@@ -1,5 +1,21 @@
 // Core types for LCM
 
+export type TaskStatus = 'pending' | 'in_progress' | 'completed' | 'failed' | 'cancelled';
+
+export interface LcmTask {
+  id: string;
+  conversationId: string;
+  parentId: string | null;
+  title: string;
+  description: string;
+  status: TaskStatus;
+  delegatedScope: string | null;
+  keptWork: string | null;
+  result: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export type MessageRole = 'user' | 'assistant' | 'tool_use' | 'tool_result' | 'system';
 
 export interface LcmMessage {
