@@ -141,7 +141,8 @@ export interface DescribeResult {
 }
 
 export interface ExpandResult {
-  summaryId: string;
+  summaryId: string | null;  // null = direct message fallback, no covering summary
+  isFallback?: boolean;
   messages: LcmMessage[];
   childSummaries: LcmSummary[];
   truncated: boolean;

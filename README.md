@@ -53,7 +53,7 @@ flowchart TD
     E -- Yes --> F[PreCompact hook\nSnapshot messages]
     F --> G[Claude Code built-in compaction]
     G --> H[PostCompact hook\nCapture compact_summary\nStore in SQLite]
-    H --> I[Re-inject summaries\nas additionalContext]
+    H --> I[Re-inject summaries\nas systemMessage]
     I --> C
 
     C -. on demand .-> J[lcm_grep / lcm_expand\nlcm_request_compact]
@@ -77,7 +77,8 @@ flowchart TD
 | **Search** | Not possible | Full-text search via `lcm_grep` |
 | **Cost** | Free (uses subscription) | Free by default; optional granular mode via CLI (free) or SDK (~$0.001/call) |
 | **Storage** | In Claude Code's memory | Local SQLite (`~/.lcm/lcm.db`) |
-| **DAG hierarchy** | Flat single summary | Multi-level summaries (compactable over time) |
+| **Summary storage** | Discarded after session | Persisted in SQLite, all sessions searchable |
+| **Manual condensation** | Not possible | `lcm_request_compact` + `lcm_store_summary` condenses summaries on demand |
 
 The key insight: LCM doesn't fight compaction — it captures what Claude generates, then lets Claude retrieve it later.
 

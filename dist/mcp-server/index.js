@@ -21177,6 +21177,9 @@ var SummaryStore = class {
     ).all(summaryId);
     return rows.map((r) => r.message_id);
   }
+  updateParentId(summaryId, parentId) {
+    this.db.prepare("UPDATE summaries SET parent_id = ? WHERE id = ?").run(parentId, summaryId);
+  }
   /** Get the highest compacted sequence number for a conversation */
   getMaxCompactedSequence(conversationId) {
     const row = this.db.prepare(
@@ -21364,7 +21367,8 @@ var RetrievalEngine = class {
         const msg = this.conversationStore.getMessage(match.messageId);
         if (msg) {
           results.push({
-            summaryId: "",
+            summaryId: null,
+            isFallback: true,
             messages: [msg],
             childSummaries: [],
             truncated: false,
@@ -21452,6 +21456,48 @@ var tools = [
     }
   },
   {
+    name: "lcm_list_summaries",
+    description: "List all summaries stored for a conversation. Use this to discover summary IDs before calling lcm_describe or lcm_expand. Returns IDs, levels, message ranges, token counts, and content previews.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        conversation_id: {
+          type: "string",
+          description: "The conversation ID to list summaries for"
+        },
+        level: {
+          type: "number",
+          description: "Filter by summary level: 0 = leaf summaries, 1+ = condensed. Omit for all levels."
+        }
+      },
+      required: ["conversation_id"]
+    },
+    handler(args, { summaryStore }) {
+      const conversationId = args["conversation_id"];
+      const level = args["level"];
+      const summaries = summaryStore.getSummariesForConversation(conversationId, level);
+      if (summaries.length === 0) {
+        return {
+          found: false,
+          message: `No summaries found for conversation: ${conversationId}`
+        };
+      }
+      return {
+        found: true,
+        count: summaries.length,
+        summaries: summaries.map((s) => ({
+          id: s.id,
+          level: s.level,
+          parentId: s.parentId,
+          messageRange: `${s.messageRangeStart}\u2013${s.messageRangeEnd}`,
+          tokenCount: s.tokenCount,
+          createdAt: new Date(s.createdAt).toISOString(),
+          preview: s.content.length > 200 ? s.content.slice(0, 200) + "\u2026" : s.content
+        }))
+      };
+    }
+  },
+  {
     name: "lcm_expand",
     description: "Retrieve the original messages that were compacted into a summary. Use when you need full details behind a summary.",
     inputSchema: {
@@ -21534,6 +21580,8 @@ var tools = [
         found: true,
         expansions: results.map((r) => ({
           summaryId: r.summaryId,
+          // null when direct message match
+          isFallback: r.isFallback ?? false,
           messageCount: r.messages.length,
           truncated: r.truncated,
           messages: r.messages.map((m) => ({
@@ -21638,6 +21686,9 @@ var tools = [
         messageRangeEnd: rangeEnd,
         metadata: { sourceSummaryIds }
       });
+      for (const sourceId of sourceSummaryIds) {
+        summaryStore.updateParentId(sourceId, stored.id);
+      }
       return {
         success: true,
         summaryId: stored.id,

@@ -95,6 +95,52 @@ export const tools: ToolDefinition[] = [
   },
 
   {
+    name: 'lcm_list_summaries',
+    description:
+      'List all summaries stored for a conversation. Use this to discover summary IDs before calling lcm_describe or lcm_expand. Returns IDs, levels, message ranges, token counts, and content previews.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        conversation_id: {
+          type: 'string',
+          description: 'The conversation ID to list summaries for',
+        },
+        level: {
+          type: 'number',
+          description: 'Filter by summary level: 0 = leaf summaries, 1+ = condensed. Omit for all levels.',
+        },
+      },
+      required: ['conversation_id'],
+    },
+    handler(args, { summaryStore }) {
+      const conversationId = args['conversation_id'] as string;
+      const level = args['level'] as number | undefined;
+
+      const summaries = summaryStore.getSummariesForConversation(conversationId, level);
+      if (summaries.length === 0) {
+        return {
+          found: false,
+          message: `No summaries found for conversation: ${conversationId}`,
+        };
+      }
+
+      return {
+        found: true,
+        count: summaries.length,
+        summaries: summaries.map((s) => ({
+          id: s.id,
+          level: s.level,
+          parentId: s.parentId,
+          messageRange: `${s.messageRangeStart}–${s.messageRangeEnd}`,
+          tokenCount: s.tokenCount,
+          createdAt: new Date(s.createdAt).toISOString(),
+          preview: s.content.length > 200 ? s.content.slice(0, 200) + '…' : s.content,
+        })),
+      };
+    },
+  },
+
+  {
     name: 'lcm_expand',
     description:
       'Retrieve the original messages that were compacted into a summary. Use when you need full details behind a summary.',
@@ -182,7 +228,8 @@ export const tools: ToolDefinition[] = [
       return {
         found: true,
         expansions: results.map((r) => ({
-          summaryId: r.summaryId,
+          summaryId: r.summaryId,            // null when direct message match
+          isFallback: r.isFallback ?? false,
           messageCount: r.messages.length,
           truncated: r.truncated,
           messages: r.messages.map((m) => ({
@@ -308,6 +355,11 @@ export const tools: ToolDefinition[] = [
         messageRangeEnd: rangeEnd,
         metadata: { sourceSummaryIds },
       });
+
+      // Link source summaries to this new condensed summary
+      for (const sourceId of sourceSummaryIds) {
+        summaryStore.updateParentId(sourceId, stored.id);
+      }
 
       return {
         success: true,

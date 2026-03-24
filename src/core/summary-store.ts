@@ -116,6 +116,10 @@ export class SummaryStore {
     return rows.map((r) => r.message_id);
   }
 
+  updateParentId(summaryId: string, parentId: string): void {
+    this.db.prepare('UPDATE summaries SET parent_id = ? WHERE id = ?').run(parentId, summaryId);
+  }
+
   /** Get the highest compacted sequence number for a conversation */
   getMaxCompactedSequence(conversationId: string): number {
     const row = this.db.prepare(

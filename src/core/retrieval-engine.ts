@@ -147,7 +147,8 @@ export class RetrievalEngine {
         const msg = this.conversationStore.getMessage(match.messageId);
         if (msg) {
           results.push({
-            summaryId: '',
+            summaryId: null,
+            isFallback: true,
             messages: [msg],
             childSummaries: [],
             truncated: false,
