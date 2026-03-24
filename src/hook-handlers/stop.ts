@@ -8,8 +8,8 @@ import { runHook } from './orchestrator.js';
 import type { HookContext } from './orchestrator.js';
 import type { HookOutput } from '../core/types.js';
 import { ingestNewMessages } from './ingest.js';
-import { summarizeMessages } from '../core/summarize.js';
-import { summarizeWithCLI } from '../core/summarize-cli.js';
+import { summarizeWithEscalation } from '../core/summarize.js';
+import { summarizeWithCLIEscalation } from '../core/summarize-cli.js';
 import { estimateTokens } from '../core/transcript-reader.js';
 import { logger } from '../utils/logger.js';
 
@@ -43,9 +43,9 @@ async function handler(ctx: HookContext): Promise<HookOutput> {
         const mode = config.anthropicApiKey ? 'haiku-sdk' : 'claude-cli';
         logger.info('Stop: token threshold reached, summarizing', { tokens: pendingTokens, messages: pending.length, mode });
 
-        const summaryText = config.anthropicApiKey
-          ? await summarizeMessages(pending, config.anthropicApiKey)
-          : await summarizeWithCLI(pending);
+        const { text: summaryText, level: escalationLevel } = config.anthropicApiKey
+          ? await summarizeWithEscalation(pending, config.anthropicApiKey)
+          : await summarizeWithCLIEscalation(pending);
 
         summaryStore.insertSummary({
           conversationId: conversation.id,
@@ -57,7 +57,7 @@ async function handler(ctx: HookContext): Promise<HookOutput> {
           messageRangeEnd: maxSeq,
         });
 
-        logger.info('Stop: granular summary stored', { range: `${lastSeq + 1}-${maxSeq}`, mode });
+        logger.info('Stop: granular summary stored', { range: `${lastSeq + 1}-${maxSeq}`, mode, escalationLevel });
       }
     } catch (err) {
       // Granular compaction is best-effort — never block the Stop hook

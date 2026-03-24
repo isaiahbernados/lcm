@@ -12,6 +12,8 @@ import { ConversationStore } from '../core/conversation-store.js';
 import { SummaryStore } from '../core/summary-store.js';
 import { RetrievalEngine } from '../core/retrieval-engine.js';
 import { ContextAssembler } from '../core/context-assembler.js';
+import { deterministicTruncate } from '../core/summarize.js';
+import { estimateTokens } from '../core/transcript-reader.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -789,5 +791,41 @@ describe('ContextAssembler', () => {
     expect(result).not.toBeNull();
     // Low-importance item should be filtered out by getContextItems(convId, 0.5)
     expect(result).not.toContain('Low importance detail.');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Suite 5 — Summarization
+// ---------------------------------------------------------------------------
+
+describe('Summarization', () => {
+  it('deterministicTruncate concatenates messages in [role]: content format', () => {
+    const messages = [
+      { role: 'user' as const, content: 'Hello world', tokenCount: 3, id: 'msg_1', conversationId: 'c1', sequenceNumber: 0, timestamp: NOW },
+      { role: 'assistant' as const, content: 'Hi there', tokenCount: 2, id: 'msg_2', conversationId: 'c1', sequenceNumber: 1, timestamp: NOW + 1 },
+    ];
+
+    const result = deterministicTruncate(messages, 512);
+
+    expect(result).toContain('[user]: Hello world');
+    expect(result).toContain('[assistant]: Hi there');
+    expect(result).toContain('---');
+    expect(result.length).toBeLessThanOrEqual(512 * 4);
+  });
+
+  it('deterministicTruncate always produces output smaller than input for large messages', () => {
+    // Create messages totaling ~10000 tokens (each token ~4 chars)
+    const bigContent = 'x'.repeat(4 * 2500); // 2500 tokens per message
+    const messages = [
+      { role: 'user' as const, content: bigContent, tokenCount: 2500, id: 'msg_1', conversationId: 'c1', sequenceNumber: 0, timestamp: NOW },
+      { role: 'assistant' as const, content: bigContent, tokenCount: 2500, id: 'msg_2', conversationId: 'c1', sequenceNumber: 1, timestamp: NOW + 1 },
+      { role: 'user' as const, content: bigContent, tokenCount: 2500, id: 'msg_3', conversationId: 'c1', sequenceNumber: 2, timestamp: NOW + 2 },
+      { role: 'assistant' as const, content: bigContent, tokenCount: 2500, id: 'msg_4', conversationId: 'c1', sequenceNumber: 3, timestamp: NOW + 3 },
+    ];
+
+    const result = deterministicTruncate(messages, 512);
+    const resultTokens = estimateTokens(result);
+
+    expect(resultTokens).toBeLessThanOrEqual(512);
   });
 });
