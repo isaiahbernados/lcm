@@ -620,6 +620,26 @@ describe('RetrievalEngine', () => {
     expect(fallback!.messages.length).toBeGreaterThanOrEqual(1);
   });
 
+  it('expandQuery(query) respects tokenCap in fallback path when no summary covers the match', () => {
+    // Insert a message with a large token count but no covering summary
+    convStore.insertMessage({
+      conversationId: convId,
+      role: 'user',
+      content: 'huge fallback message omega',
+      tokenCount: 5000,
+      timestamp: NOW,
+    });
+
+    // tokenCap=50, maxResults defaults to 5 → perResultCap=10, far below 5000
+    const results = engine.expandQuery('huge fallback message omega', 5, 50);
+
+    expect(results.length).toBeGreaterThanOrEqual(1);
+    const fallback = results.find((r) => r.isFallback === true);
+    expect(fallback).toBeDefined();
+    expect(fallback!.truncated).toBe(true);
+    expect(fallback!.messages).toHaveLength(0);
+  });
+
   it('expandQuery(query) returns empty array when no messages match', () => {
     convStore.insertMessage({ conversationId: convId, role: 'user', content: 'something completely different', tokenCount: 4, timestamp: NOW });
 
