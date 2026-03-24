@@ -20942,6 +20942,25 @@ function runMigrations(db) {
     );
     CREATE INDEX IF NOT EXISTS idx_files_conversation_id ON files(conversation_id);
     CREATE INDEX IF NOT EXISTS idx_files_message_id ON files(message_id);
+
+    CREATE TABLE IF NOT EXISTS tasks (
+      id TEXT PRIMARY KEY,
+      conversation_id TEXT NOT NULL,
+      parent_id TEXT,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'pending',
+      delegated_scope TEXT,
+      kept_work TEXT,
+      result TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+      FOREIGN KEY (parent_id) REFERENCES tasks(id) ON DELETE SET NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_tasks_conversation_id ON tasks(conversation_id);
+    CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+    CREATE INDEX IF NOT EXISTS idx_tasks_parent_id ON tasks(parent_id);
   `);
 }
 
@@ -21517,6 +21536,106 @@ var RetrievalEngine = class {
       }
     }
     return results;
+  }
+};
+
+// src/core/task-store.ts
+import { randomUUID as randomUUID4 } from "node:crypto";
+function rowToTask(row) {
+  return {
+    id: row.id,
+    conversationId: row.conversation_id,
+    parentId: row.parent_id,
+    title: row.title,
+    description: row.description,
+    status: row.status,
+    delegatedScope: row.delegated_scope,
+    keptWork: row.kept_work,
+    result: row.result,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+var TaskStore = class {
+  constructor(db) {
+    this.db = db;
+  }
+  createTask(params) {
+    const id = `task_${randomUUID4()}`;
+    const now = Date.now();
+    const description = params.description ?? "";
+    const parentId = params.parentId ?? null;
+    const delegatedScope = params.delegatedScope ?? null;
+    const keptWork = params.keptWork ?? null;
+    this.db.prepare(
+      `INSERT INTO tasks
+         (id, conversation_id, parent_id, title, description, status, delegated_scope, kept_work, result, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, NULL, ?, ?)`
+    ).run(id, params.conversationId, parentId, params.title, description, delegatedScope, keptWork, now, now);
+    return {
+      id,
+      conversationId: params.conversationId,
+      parentId,
+      title: params.title,
+      description,
+      status: "pending",
+      delegatedScope,
+      keptWork,
+      result: null,
+      createdAt: now,
+      updatedAt: now
+    };
+  }
+  getTask(taskId) {
+    const row = this.db.prepare(
+      "SELECT * FROM tasks WHERE id = ?"
+    ).get(taskId);
+    return row ? rowToTask(row) : null;
+  }
+  listTasks(filters = {}) {
+    const conditions = [];
+    const params = [];
+    if (filters.conversationId !== void 0) {
+      conditions.push("conversation_id = ?");
+      params.push(filters.conversationId);
+    }
+    if (filters.status !== void 0) {
+      conditions.push("status = ?");
+      params.push(filters.status);
+    }
+    if (filters.parentId !== void 0) {
+      conditions.push("parent_id = ?");
+      params.push(filters.parentId);
+    }
+    const where = conditions.length > 0 ? " WHERE " + conditions.join(" AND ") : "";
+    const sql = `SELECT * FROM tasks${where} ORDER BY created_at ASC`;
+    const rows = this.db.prepare(sql).all(...params);
+    return rows.map(rowToTask);
+  }
+  updateTask(taskId, updates) {
+    const now = Date.now();
+    const setClauses = ["updated_at = ?"];
+    const params = [now];
+    if (updates.status !== void 0) {
+      setClauses.push("status = ?");
+      params.push(updates.status);
+    }
+    if (updates.result !== void 0) {
+      setClauses.push("result = ?");
+      params.push(updates.result);
+    }
+    if (updates.delegatedScope !== void 0) {
+      setClauses.push("delegated_scope = ?");
+      params.push(updates.delegatedScope);
+    }
+    if (updates.keptWork !== void 0) {
+      setClauses.push("kept_work = ?");
+      params.push(updates.keptWork);
+    }
+    params.push(taskId);
+    const sql = `UPDATE tasks SET ${setClauses.join(", ")} WHERE id = ?`;
+    this.db.prepare(sql).run(...params);
+    return this.getTask(taskId);
   }
 };
 
@@ -25614,7 +25733,7 @@ var tools = [
   },
   {
     name: "lcm_expand",
-    description: "Retrieve the original messages that were compacted into a summary. Use when you need full details behind a summary.",
+    description: "Retrieve the original messages that were compacted into a summary. Use when you need full details behind a summary. When delegating sub-tasks, consider using lcm_task_create to track scope reduction before expanding.",
     inputSchema: {
       type: "object",
       properties: {
@@ -25815,6 +25934,122 @@ var tools = [
       }
       return { found: false, message: "Provide file_id, conversation_id, or query" };
     }
+  },
+  {
+    name: "lcm_task_create",
+    description: "Create a task to track delegated work. When delegating to sub-agents, specify delegated_scope (what you hand off) and kept_work (what you retain) to maintain scope reduction.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        conversation_id: {
+          type: "string",
+          description: "The conversation ID this task belongs to"
+        },
+        title: {
+          type: "string",
+          description: "Short title for the task"
+        },
+        description: {
+          type: "string",
+          description: "Detailed description of the task (optional)"
+        },
+        parent_id: {
+          type: "string",
+          description: "Parent task ID for subtasks (optional)"
+        },
+        delegated_scope: {
+          type: "string",
+          description: "Description of work being handed off to a sub-agent (optional)"
+        },
+        kept_work: {
+          type: "string",
+          description: "Description of work retained by this agent (optional)"
+        }
+      },
+      required: ["conversation_id", "title"]
+    },
+    handler(args, { taskStore }) {
+      const task = taskStore.createTask({
+        conversationId: args["conversation_id"],
+        title: args["title"],
+        description: args["description"],
+        parentId: args["parent_id"],
+        delegatedScope: args["delegated_scope"],
+        keptWork: args["kept_work"]
+      });
+      return task;
+    }
+  },
+  {
+    name: "lcm_task_list",
+    description: "List tasks for tracking delegated work. Filter by conversation, status, or parent task.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        conversation_id: {
+          type: "string",
+          description: "Filter by conversation ID (optional)"
+        },
+        status: {
+          type: "string",
+          description: "Filter by status: pending, in_progress, completed, failed, cancelled (optional)"
+        },
+        parent_id: {
+          type: "string",
+          description: "Filter by parent task ID to list subtasks (optional)"
+        }
+      }
+    },
+    handler(args, { taskStore }) {
+      const tasks = taskStore.listTasks({
+        conversationId: args["conversation_id"],
+        status: args["status"],
+        parentId: args["parent_id"]
+      });
+      return { count: tasks.length, tasks };
+    }
+  },
+  {
+    name: "lcm_task_update",
+    description: "Update a task status or result. Use to mark tasks completed, failed, or record results.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        task_id: {
+          type: "string",
+          description: "The task ID to update"
+        },
+        status: {
+          type: "string",
+          description: "New status: pending, in_progress, completed, failed, cancelled (optional)"
+        },
+        result: {
+          type: "string",
+          description: "Result or outcome of the task (optional)"
+        },
+        delegated_scope: {
+          type: "string",
+          description: "Updated delegated scope description (optional)"
+        },
+        kept_work: {
+          type: "string",
+          description: "Updated kept work description (optional)"
+        }
+      },
+      required: ["task_id"]
+    },
+    handler(args, { taskStore }) {
+      const task = taskStore.updateTask(args["task_id"], {
+        status: args["status"],
+        result: args["result"],
+        delegatedScope: args["delegated_scope"],
+        keptWork: args["kept_work"]
+      });
+      if (!task) {
+        return { found: false, message: `No task found with ID: ${args["task_id"]}` };
+      }
+      return task;
+    }
   }
 ];
 
@@ -25860,7 +26095,8 @@ async function main() {
   const summaryStore = new SummaryStore(db);
   const fileStore = new FileStore(db);
   const engine = new RetrievalEngine(conversationStore, summaryStore);
-  const toolCtx = { engine, conversationStore, config: config2, fileStore };
+  const taskStore = new TaskStore(db);
+  const toolCtx = { engine, conversationStore, config: config2, fileStore, taskStore };
   const server = new Server(
     { name: "lcm", version: "0.1.0" },
     { capabilities: { tools: {} } }

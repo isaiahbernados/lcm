@@ -4,6 +4,7 @@
 
 import type { RetrievalEngine } from '../core/retrieval-engine.js';
 import type { ConversationStore } from '../core/conversation-store.js';
+import type { TaskStore } from '../core/task-store.js';
 import type { LcmConfig } from '../db/config.js';
 import type { FileStore } from '../core/file-store.js';
 import { llmMap } from '../core/llm-map.js';
@@ -12,6 +13,7 @@ import path from 'node:path';
 export interface ToolContext {
   engine: RetrievalEngine;
   conversationStore: ConversationStore;
+  taskStore: TaskStore;
   config: LcmConfig;
   fileStore: FileStore;
 }
@@ -116,7 +118,7 @@ export const tools: ToolDefinition[] = [
   {
     name: 'lcm_expand',
     description:
-      'Retrieve the original messages that were compacted into a summary. Use when you need full details behind a summary.',
+      'Retrieve the original messages that were compacted into a summary. Use when you need full details behind a summary. When delegating sub-tasks, consider using lcm_task_create to track scope reduction before expanding.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -332,6 +334,126 @@ export const tools: ToolDefinition[] = [
       }
 
       return { found: false, message: 'Provide file_id, conversation_id, or query' };
+    },
+  },
+
+  {
+    name: 'lcm_task_create',
+    description:
+      'Create a task to track delegated work. When delegating to sub-agents, specify delegated_scope (what you hand off) and kept_work (what you retain) to maintain scope reduction.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        conversation_id: {
+          type: 'string',
+          description: 'The conversation ID this task belongs to',
+        },
+        title: {
+          type: 'string',
+          description: 'Short title for the task',
+        },
+        description: {
+          type: 'string',
+          description: 'Detailed description of the task (optional)',
+        },
+        parent_id: {
+          type: 'string',
+          description: 'Parent task ID for subtasks (optional)',
+        },
+        delegated_scope: {
+          type: 'string',
+          description: 'Description of work being handed off to a sub-agent (optional)',
+        },
+        kept_work: {
+          type: 'string',
+          description: 'Description of work retained by this agent (optional)',
+        },
+      },
+      required: ['conversation_id', 'title'],
+    },
+    handler(args, { taskStore }) {
+      const task = taskStore.createTask({
+        conversationId: args['conversation_id'] as string,
+        title: args['title'] as string,
+        description: args['description'] as string | undefined,
+        parentId: args['parent_id'] as string | undefined,
+        delegatedScope: args['delegated_scope'] as string | undefined,
+        keptWork: args['kept_work'] as string | undefined,
+      });
+      return task;
+    },
+  },
+
+  {
+    name: 'lcm_task_list',
+    description: 'List tasks for tracking delegated work. Filter by conversation, status, or parent task.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        conversation_id: {
+          type: 'string',
+          description: 'Filter by conversation ID (optional)',
+        },
+        status: {
+          type: 'string',
+          description: 'Filter by status: pending, in_progress, completed, failed, cancelled (optional)',
+        },
+        parent_id: {
+          type: 'string',
+          description: 'Filter by parent task ID to list subtasks (optional)',
+        },
+      },
+    },
+    handler(args, { taskStore }) {
+      const tasks = taskStore.listTasks({
+        conversationId: args['conversation_id'] as string | undefined,
+        status: args['status'] as string | undefined,
+        parentId: args['parent_id'] as string | undefined,
+      });
+      return { count: tasks.length, tasks };
+    },
+  },
+
+  {
+    name: 'lcm_task_update',
+    description: 'Update a task status or result. Use to mark tasks completed, failed, or record results.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        task_id: {
+          type: 'string',
+          description: 'The task ID to update',
+        },
+        status: {
+          type: 'string',
+          description: 'New status: pending, in_progress, completed, failed, cancelled (optional)',
+        },
+        result: {
+          type: 'string',
+          description: 'Result or outcome of the task (optional)',
+        },
+        delegated_scope: {
+          type: 'string',
+          description: 'Updated delegated scope description (optional)',
+        },
+        kept_work: {
+          type: 'string',
+          description: 'Updated kept work description (optional)',
+        },
+      },
+      required: ['task_id'],
+    },
+    handler(args, { taskStore }) {
+      const task = taskStore.updateTask(args['task_id'] as string, {
+        status: args['status'] as string | undefined,
+        result: args['result'] as string | undefined,
+        delegatedScope: args['delegated_scope'] as string | undefined,
+        keptWork: args['kept_work'] as string | undefined,
+      });
+      if (!task) {
+        return { found: false, message: `No task found with ID: ${args['task_id']}` };
+      }
+      return task;
     },
   },
 

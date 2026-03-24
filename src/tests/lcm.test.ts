@@ -14,6 +14,7 @@ import { RetrievalEngine } from '../core/retrieval-engine.js';
 import { ContextAssembler } from '../core/context-assembler.js';
 import { deterministicTruncate } from '../core/summarize.js';
 import { estimateTokens } from '../core/transcript-reader.js';
+import { TaskStore } from '../core/task-store.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1016,7 +1017,6 @@ describe('Summarization', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
 // Suite N — FileStore
 // ---------------------------------------------------------------------------
 
@@ -1079,7 +1079,6 @@ describe('FileStore', () => {
   });
 
   it('getFilesForConversation returns only files for that conversation', () => {
-    // Second conversation
     const conv2 = convStore.getOrCreateConversation('session-fs-2', '/proj2');
     const msg2 = convStore.insertMessage({ conversationId: conv2.id, role: 'tool_result', content: 'y'.repeat(100), tokenCount: 25, timestamp: NOW });
 
@@ -1232,13 +1231,11 @@ describe('Ingest large file integration', () => {
     summaryStore = new SummaryStore(db);
     fileStore = new FileStore(db);
 
-    // Create a temp transcript file
     const dir = mkdtempSync(join(tmpdir(), 'lcm-test-'));
     transcriptPath = join(dir, 'transcript.jsonl');
   });
 
   it('stores a file record when a tool_result message exceeds the threshold', async () => {
-    // Build content that exceeds 25000 tokens (~100K chars)
     const bigJson = JSON.stringify({ data: 'x'.repeat(100_000), metadata: { count: 42, items: [1, 2, 3] } });
 
     const entry = {
@@ -1285,10 +1282,140 @@ describe('Ingest large file integration', () => {
     const conv = convStore.getConversationBySession(sessionId);
     if (conv) {
       const files = fileStore.getFilesForConversation(conv.id);
-      // No large files should be stored (small content)
       for (const f of files) {
         expect(f.rawTokenCount).toBeGreaterThan(25000);
       }
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Suite — TaskStore
+// ---------------------------------------------------------------------------
+
+describe('TaskStore', () => {
+  let db: DatabaseSync;
+  let convStore: ConversationStore;
+  let taskStore: TaskStore;
+  let convId: string;
+
+  beforeEach(() => {
+    db = makeDb();
+    convStore = new ConversationStore(db);
+    taskStore = new TaskStore(db);
+    const conv = convStore.getOrCreateConversation('session-tasks', '/proj');
+    convId = conv.id;
+  });
+
+  it('createTask and getTask — verify all fields roundtrip', () => {
+    const task = taskStore.createTask({
+      conversationId: convId,
+      title: 'Implement feature X',
+      description: 'Detailed description of feature X',
+      delegatedScope: 'Write the backend API',
+      keptWork: 'Write the frontend UI',
+    });
+
+    expect(task.id).toMatch(/^task_/);
+    expect(task.conversationId).toBe(convId);
+    expect(task.parentId).toBeNull();
+    expect(task.title).toBe('Implement feature X');
+    expect(task.description).toBe('Detailed description of feature X');
+    expect(task.status).toBe('pending');
+    expect(task.delegatedScope).toBe('Write the backend API');
+    expect(task.keptWork).toBe('Write the frontend UI');
+    expect(task.result).toBeNull();
+    expect(typeof task.createdAt).toBe('number');
+    expect(typeof task.updatedAt).toBe('number');
+
+    const fetched = taskStore.getTask(task.id);
+    expect(fetched).not.toBeNull();
+    expect(fetched!.id).toBe(task.id);
+    expect(fetched!.title).toBe('Implement feature X');
+    expect(fetched!.description).toBe('Detailed description of feature X');
+    expect(fetched!.status).toBe('pending');
+    expect(fetched!.delegatedScope).toBe('Write the backend API');
+    expect(fetched!.keptWork).toBe('Write the frontend UI');
+  });
+
+  it('getTask returns null for unknown id', () => {
+    const result = taskStore.getTask('task_nonexistent');
+    expect(result).toBeNull();
+  });
+
+  it('listTasks with filters — filter by status and conversationId', () => {
+    const conv2 = convStore.getOrCreateConversation('session-tasks-2', '/proj2');
+
+    taskStore.createTask({ conversationId: convId, title: 'Task A', description: 'pending task' });
+    const t2 = taskStore.createTask({ conversationId: convId, title: 'Task B', description: 'will be in_progress' });
+    taskStore.createTask({ conversationId: conv2.id, title: 'Task C', description: 'other conv' });
+
+    taskStore.updateTask(t2.id, { status: 'in_progress' });
+
+    const convTasks = taskStore.listTasks({ conversationId: convId });
+    expect(convTasks).toHaveLength(2);
+    expect(convTasks.every((t) => t.conversationId === convId)).toBe(true);
+
+    const pendingTasks = taskStore.listTasks({ status: 'pending' });
+    expect(pendingTasks.length).toBeGreaterThanOrEqual(1);
+    expect(pendingTasks.every((t) => t.status === 'pending')).toBe(true);
+
+    const inProgressTasks = taskStore.listTasks({ status: 'in_progress' });
+    expect(inProgressTasks).toHaveLength(1);
+    expect(inProgressTasks[0]!.id).toBe(t2.id);
+
+    const convPending = taskStore.listTasks({ conversationId: convId, status: 'pending' });
+    expect(convPending).toHaveLength(1);
+    expect(convPending[0]!.title).toBe('Task A');
+  });
+
+  it('updateTask — update status from pending to completed, verify updatedAt changes', async () => {
+    const task = taskStore.createTask({ conversationId: convId, title: 'Update me' });
+    const originalUpdatedAt = task.updatedAt;
+
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    const updated = taskStore.updateTask(task.id, { status: 'completed', result: 'Done successfully' });
+
+    expect(updated).not.toBeNull();
+    expect(updated!.status).toBe('completed');
+    expect(updated!.result).toBe('Done successfully');
+    expect(updated!.updatedAt).toBeGreaterThanOrEqual(originalUpdatedAt);
+  });
+
+  it('subtask hierarchy — create parent task, create child with parentId, verify parentId', () => {
+    const parent = taskStore.createTask({
+      conversationId: convId,
+      title: 'Parent task',
+    });
+
+    const child = taskStore.createTask({
+      conversationId: convId,
+      title: 'Child task',
+      parentId: parent.id,
+    });
+
+    expect(child.parentId).toBe(parent.id);
+
+    const fetchedChild = taskStore.getTask(child.id);
+    expect(fetchedChild).not.toBeNull();
+    expect(fetchedChild!.parentId).toBe(parent.id);
+
+    const fetchedParent = taskStore.getTask(parent.id);
+    expect(fetchedParent).not.toBeNull();
+    expect(fetchedParent!.parentId).toBeNull();
+  });
+
+  it('listTasks by parentId — returns only subtasks of that parent', () => {
+    const parent = taskStore.createTask({ conversationId: convId, title: 'Parent' });
+    const child1 = taskStore.createTask({ conversationId: convId, title: 'Child 1', parentId: parent.id });
+    const child2 = taskStore.createTask({ conversationId: convId, title: 'Child 2', parentId: parent.id });
+    taskStore.createTask({ conversationId: convId, title: 'Unrelated' });
+
+    const subtasks = taskStore.listTasks({ parentId: parent.id });
+    expect(subtasks).toHaveLength(2);
+    const ids = subtasks.map((t) => t.id);
+    expect(ids).toContain(child1.id);
+    expect(ids).toContain(child2.id);
   });
 });

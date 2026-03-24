@@ -22,6 +22,7 @@ import { ConversationStore } from '../core/conversation-store.js';
 import { SummaryStore } from '../core/summary-store.js';
 import { FileStore } from '../core/file-store.js';
 import { RetrievalEngine } from '../core/retrieval-engine.js';
+import { TaskStore } from '../core/task-store.js';
 import { tools } from './tools.js';
 import { logger } from '../utils/logger.js';
 
@@ -34,7 +35,8 @@ async function main() {
   const summaryStore = new SummaryStore(db);
   const fileStore = new FileStore(db);
   const engine = new RetrievalEngine(conversationStore, summaryStore);
-  const toolCtx = { engine, conversationStore, config, fileStore };
+  const taskStore = new TaskStore(db);
+  const toolCtx = { engine, conversationStore, config, fileStore, taskStore };
 
   const server = new Server(
     { name: 'lcm', version: '0.1.0' },

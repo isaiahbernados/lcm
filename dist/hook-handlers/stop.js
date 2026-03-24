@@ -135,6 +135,25 @@ function runMigrations(db) {
     );
     CREATE INDEX IF NOT EXISTS idx_files_conversation_id ON files(conversation_id);
     CREATE INDEX IF NOT EXISTS idx_files_message_id ON files(message_id);
+
+    CREATE TABLE IF NOT EXISTS tasks (
+      id TEXT PRIMARY KEY,
+      conversation_id TEXT NOT NULL,
+      parent_id TEXT,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'pending',
+      delegated_scope TEXT,
+      kept_work TEXT,
+      result TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+      FOREIGN KEY (parent_id) REFERENCES tasks(id) ON DELETE SET NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_tasks_conversation_id ON tasks(conversation_id);
+    CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+    CREATE INDEX IF NOT EXISTS idx_tasks_parent_id ON tasks(parent_id);
   `);
 }
 
