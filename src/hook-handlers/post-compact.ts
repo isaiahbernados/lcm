@@ -27,7 +27,7 @@ async function handler(ctx: HookContext): Promise<HookOutput> {
     const existingMax = summaryStore.getMaxCompactedSequence(conversation.id);
     const rangeStart = Math.max(0, existingMax + 1);
 
-    summaryStore.insertSummary({
+    const summary = summaryStore.insertSummary({
       conversationId: conversation.id,
       parentId: null,
       level: 0,
@@ -36,6 +36,12 @@ async function handler(ctx: HookContext): Promise<HookOutput> {
       messageRangeStart: rangeStart,
       messageRangeEnd: rangeEnd,
     });
+
+    // Link summary to messages it covers
+    const msgsInRange = conversationStore.getMessages(conversation.id, rangeStart, rangeEnd);
+    if (msgsInRange.length > 0) {
+      summaryStore.linkSummaryToMessages(summary.id, msgsInRange.map(m => m.id));
+    }
 
     logger.info('PostCompact: stored Claude-generated summary', {
       tokens: estimateTokens(compactSummary),
