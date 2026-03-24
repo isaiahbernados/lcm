@@ -4,17 +4,22 @@
 
 import type { RetrievalEngine } from '../core/retrieval-engine.js';
 import type { ConversationStore } from '../core/conversation-store.js';
+import type { LcmConfig } from '../db/config.js';
+import { llmMap } from '../core/llm-map.js';
+import os from 'node:os';
+import path from 'node:path';
 
 export interface ToolContext {
   engine: RetrievalEngine;
   conversationStore: ConversationStore;
+  config: LcmConfig;
 }
 
 export interface ToolDefinition {
   name: string;
   description: string;
   inputSchema: object;
-  handler: (args: Record<string, unknown>, ctx: ToolContext) => unknown;
+  handler: (args: Record<string, unknown>, ctx: ToolContext) => unknown | Promise<unknown>;
 }
 
 export const tools: ToolDefinition[] = [
@@ -207,6 +212,71 @@ export const tools: ToolDefinition[] = [
           })),
         })),
       };
+    },
+  },
+
+  {
+    name: 'lcm_llm_map',
+    description:
+      'Process each line of an input JSONL file through an LLM prompt template and write results to an output JSONL file. Each line is substituted into {{line}} in the prompt template. Supports concurrency control and optional JSON Schema validation of responses. Requires LCM_ANTHROPIC_API_KEY or ANTHROPIC_API_KEY to be configured.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        input_path: {
+          type: 'string',
+          description: 'Absolute path to the input JSONL file (one record per line)',
+        },
+        prompt_template: {
+          type: 'string',
+          description: 'Prompt template with {{line}} placeholder that will be replaced by each input line',
+        },
+        output_path: {
+          type: 'string',
+          description: 'Absolute path for the output JSONL file (default: input_path with .out.jsonl suffix)',
+        },
+        model: {
+          type: 'string',
+          description: 'Anthropic model to use (default: claude-haiku-4-5-20251001)',
+        },
+        max_concurrency: {
+          type: 'number',
+          description: 'Maximum number of concurrent API calls (1-20, default 5)',
+          minimum: 1,
+          maximum: 20,
+        },
+        output_schema: {
+          type: 'object',
+          description: 'Optional JSON Schema to validate each response. If provided, responses are parsed as JSON and validated. On failure, one retry is attempted.',
+        },
+      },
+      required: ['input_path', 'prompt_template'],
+    },
+    async handler(args, ctx) {
+      const apiKey = ctx.config.anthropicApiKey;
+      if (!apiKey) {
+        throw new Error(
+          'No Anthropic API key configured. Set LCM_ANTHROPIC_API_KEY or ANTHROPIC_API_KEY environment variable.'
+        );
+      }
+
+      const inputPath = args['input_path'] as string;
+      const promptTemplate = args['prompt_template'] as string;
+      const outputPath =
+        (args['output_path'] as string | undefined) ??
+        path.join(path.dirname(inputPath), path.basename(inputPath, path.extname(inputPath)) + '.out.jsonl');
+      const model = args['model'] as string | undefined;
+      const maxConcurrency = args['max_concurrency'] as number | undefined;
+      const outputSchema = args['output_schema'] as Record<string, unknown> | undefined;
+
+      return llmMap({
+        inputPath,
+        outputPath,
+        promptTemplate,
+        model,
+        maxConcurrency,
+        outputSchema,
+        apiKey,
+      });
     },
   },
 
