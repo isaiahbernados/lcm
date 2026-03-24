@@ -125,6 +125,7 @@ export interface GrepResult {
   content: string;
   timestamp: number;
   sequenceNumber: number;
+  coveringSummaryId: string | null;  // summary that covers this message, or null
 }
 
 export interface DescribeResult {
@@ -141,7 +142,8 @@ export interface DescribeResult {
 }
 
 export interface ExpandResult {
-  summaryId: string;
+  summaryId: string | null;  // null = direct message fallback, no covering summary
+  isFallback?: boolean;
   messages: LcmMessage[];
   childSummaries: LcmSummary[];
   truncated: boolean;

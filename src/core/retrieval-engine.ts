@@ -16,10 +16,37 @@ export class RetrievalEngine {
   /**
    * Full-text or LIKE search across all stored messages.
    */
-  grep(query: string, conversationId?: string, limit = 50): GrepResult[] {
-    const messages = this.conversationStore.search(query, conversationId, limit);
+  grep(query: string, conversationId?: string, limit = 50, summaryId?: string): GrepResult[] {
+    let messages = this.conversationStore.search(query, conversationId, limit);
+
+    // Optional: restrict to messages within a specific summary's scope
+    if (summaryId) {
+      const scopeSummary = this.summaryStore.getSummary(summaryId);
+      if (scopeSummary) {
+        messages = messages.filter(
+          (m) =>
+            m.conversationId === scopeSummary.conversationId &&
+            m.sequenceNumber >= scopeSummary.messageRangeStart &&
+            m.sequenceNumber <= scopeSummary.messageRangeEnd
+        );
+      }
+    }
+
+    // Build a cache of summaries per conversation for covering-summary lookup
+    const summaryCache = new Map<string, ReturnType<SummaryStore['getSummariesForConversation']>>();
+
     return messages.map((m) => {
       const conv = this.conversationStore.getConversation(m.conversationId);
+
+      // Find covering summary
+      if (!summaryCache.has(m.conversationId)) {
+        summaryCache.set(m.conversationId, this.summaryStore.getSummariesForConversation(m.conversationId, 0));
+      }
+      const convSummaries = summaryCache.get(m.conversationId)!;
+      const covering = convSummaries.find(
+        (s) => s.messageRangeStart <= m.sequenceNumber && s.messageRangeEnd >= m.sequenceNumber
+      );
+
       return {
         messageId: m.id,
         conversationId: m.conversationId,
@@ -28,6 +55,7 @@ export class RetrievalEngine {
         content: m.content,
         timestamp: m.timestamp,
         sequenceNumber: m.sequenceNumber,
+        coveringSummaryId: covering?.id ?? null,
       };
     });
   }
@@ -147,7 +175,8 @@ export class RetrievalEngine {
         const msg = this.conversationStore.getMessage(match.messageId);
         if (msg) {
           results.push({
-            summaryId: '',
+            summaryId: null,
+            isFallback: true,
             messages: [msg],
             childSummaries: [],
             truncated: false,

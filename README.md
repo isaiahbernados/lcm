@@ -53,10 +53,10 @@ flowchart TD
     E -- Yes --> F[PreCompact hook\nSnapshot messages]
     F --> G[Claude Code built-in compaction]
     G --> H[PostCompact hook\nCapture compact_summary\nStore in SQLite]
-    H --> I[Re-inject summaries\nas additionalContext]
+    H --> I[Re-inject summaries\nas systemMessage]
     I --> C
 
-    C -. on demand .-> J[lcm_grep / lcm_expand\nlcm_request_compact]
+    C -. on demand .-> J[lcm_grep / lcm_expand]
     J --> DB[(SQLite\nlcm.db)]
     B --> DB
     D --> DB
@@ -77,7 +77,7 @@ flowchart TD
 | **Search** | Not possible | Full-text search via `lcm_grep` |
 | **Cost** | Free (uses subscription) | Free by default; optional granular mode via CLI (free) or SDK (~$0.001/call) |
 | **Storage** | In Claude Code's memory | Local SQLite (`~/.lcm/lcm.db`) |
-| **DAG hierarchy** | Flat single summary | Multi-level summaries (compactable over time) |
+| **Summary storage** | Discarded after session | Persisted in SQLite, all sessions searchable |
 
 The key insight: LCM doesn't fight compaction — it captures what Claude generates, then lets Claude retrieve it later.
 
@@ -89,7 +89,7 @@ LCM supports three modes, selectable via environment variables:
 
 ### Default — compaction-cycle summaries (free)
 
-No configuration needed. When Claude Code's built-in compaction fires, LCM captures the `compact_summary` it generates and stores it in SQLite. This summary is then re-injected as `additionalContext` after compaction so Claude resumes with full awareness of what was discussed.
+No configuration needed. When Claude Code's built-in compaction fires, LCM captures the `compact_summary` it generates and stores it in SQLite. This summary is then re-injected as a `systemMessage` after compaction so Claude resumes with full awareness of what was discussed.
 
 **Granularity:** one summary per compaction cycle (coarser, but completely free).
 
@@ -235,8 +235,7 @@ Then add to `~/.claude/settings.json`:
 Start a Claude Code session. You should see the LCM MCP tools available:
 
 ```
-lcm_grep, lcm_describe, lcm_expand, lcm_expand_query,
-lcm_request_compact, lcm_store_summary
+lcm_grep, lcm_describe, lcm_expand, lcm_expand_query
 ```
 
 ---
@@ -261,19 +260,6 @@ Or directly invoke the tools:
 lcm_grep(query: "database schema migration")
 lcm_expand_query(query: "the error we fixed in the login flow")
 ```
-
-### Proactive condensation
-
-When you have many stored summaries and want to compress them into a higher-level summary (free — Claude does it):
-
-```
-Please compact our LCM history using lcm_request_compact then lcm_store_summary.
-```
-
-Claude will:
-1. Call `lcm_request_compact` to get the accumulated summaries
-2. Condense them into a tighter summary
-3. Call `lcm_store_summary` to persist it
 
 ### Configuration
 
