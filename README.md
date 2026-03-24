@@ -14,17 +14,15 @@ A Claude Code plugin that ensures **nothing is ever lost to context compaction**
 
 No build step, no manual configuration. Hooks and MCP tools are registered automatically.
 
-**Optional — granular compaction** (summarize every ~20K tokens, not just at compaction):
+Granular compaction is **on by default** — the Stop hook summarizes every ~20K tokens via `claude -p` (free, uses your subscription).
 
 ```bash
-# Free — uses your Claude subscription via claude -p (~5-6s/call):
-export LCM_USE_CLI=true
-
-# Faster — direct Haiku API (~1s/call, ~$0.001/call):
+# Optional — faster direct Haiku API (~1s/call, ~$0.001/call):
 export ANTHROPIC_API_KEY=sk-ant-api03-...
-```
 
-Without either, summaries are still created automatically on each compaction cycle.
+# Optional — disable granular compaction (fall back to compaction-cycle summaries only):
+export LCM_USE_CLI=false
+```
 
 ---
 
@@ -63,7 +61,7 @@ flowchart TD
     H --> DB
 ```
 
-> **Granular mode** (`LCM_USE_CLI=true` or `ANTHROPIC_API_KEY`): the Stop hook also checks the accumulated token count since the last summary and, if over the threshold, calls Haiku to generate a fine-grained summary — so history is preserved at higher resolution even within a single compaction cycle. See [Summarization Modes](#summarization-modes) below.
+> **Granular mode** (on by default): the Stop hook checks the accumulated token count since the last summary and, if over the threshold, calls Haiku via `claude -p` to generate a fine-grained summary — so history is preserved at higher resolution even within a single compaction cycle. Set `LCM_USE_CLI=false` to disable. See [Summarization Modes](#summarization-modes) below.
 
 ---
 
@@ -75,7 +73,7 @@ flowchart TD
 | **After compaction** | Earlier messages are gone | All messages remain queryable |
 | **Across sessions** | Summary is re-injected at start | All prior sessions searchable |
 | **Search** | Not possible | Full-text search via `lcm_grep` |
-| **Cost** | Free (uses subscription) | Free by default; optional granular mode via CLI (free) or SDK (~$0.001/call) |
+| **Cost** | Free (uses subscription) | Free by default (granular via CLI); optional SDK mode (~$0.001/call) |
 | **Storage** | In Claude Code's memory | Local SQLite (`~/.lcm/lcm.db`) |
 | **Summary storage** | Discarded after session | Persisted in SQLite, all sessions searchable |
 
@@ -87,21 +85,21 @@ The key insight: LCM doesn't fight compaction — it captures what Claude genera
 
 LCM supports three modes, selectable via environment variables:
 
-### Default — compaction-cycle summaries (free)
+### Default — granular via `claude -p` (free)
 
-No configuration needed. When Claude Code's built-in compaction fires, LCM captures the `compact_summary` it generates and stores it in SQLite. This summary is then re-injected as a `systemMessage` after compaction so Claude resumes with full awareness of what was discussed.
-
-**Granularity:** one summary per compaction cycle (coarser, but completely free).
-
-### CLI mode — granular via `claude -p` (free)
-
-```bash
-export LCM_USE_CLI=true
-```
-
-The Stop hook spawns `claude -p --model claude-haiku-4-5-20251001` as a subprocess after each response. When accumulated tokens since the last summary exceed `LCM_GRANULAR_THRESHOLD` (default 20 000), Haiku summarizes that message batch and stores it in SQLite.
+No configuration needed. The Stop hook spawns `claude -p --model claude-haiku-4-5-20251001` as a subprocess after each response. When accumulated tokens since the last summary exceed `LCM_GRANULAR_THRESHOLD` (default 20 000), Haiku summarizes that message batch and stores it in SQLite.
 
 **Granularity:** one summary per ~20K tokens. **Cost:** free (uses your Claude Code subscription). **Overhead:** ~5-6s per summarization call.
+
+### Compaction-cycle summaries only (free, lower resolution)
+
+```bash
+export LCM_USE_CLI=false
+```
+
+Disables granular summarization. When Claude Code's built-in compaction fires, LCM captures the `compact_summary` it generates and stores it in SQLite. This summary is then re-injected as a `systemMessage` after compaction so Claude resumes with full awareness of what was discussed.
+
+**Granularity:** one summary per compaction cycle (coarser, but no subprocess overhead).
 
 ### SDK mode — granular via Anthropic API (faster)
 
@@ -112,11 +110,11 @@ export ANTHROPIC_API_KEY=sk-ant-api03-...
 
 Same threshold logic as CLI mode, but calls Haiku directly via `@anthropic-ai/sdk` — no subprocess startup cost.
 
-**Granularity:** one summary per ~20K tokens. **Cost:** ~$0.001/call. **Overhead:** ~1s per call. If both `ANTHROPIC_API_KEY` and `LCM_USE_CLI` are set, the SDK takes priority.
+**Granularity:** one summary per ~20K tokens. **Cost:** ~$0.001/call. **Overhead:** ~1s per call. If `ANTHROPIC_API_KEY` is set, it takes priority over the default CLI mode.
 
 ### Future: MCP Sampling
 
-> The ideal implementation of granular compaction would use [MCP Sampling](https://modelcontextprotocol.io/docs/concepts/sampling) — a protocol feature that lets MCP servers request LLM completions through the host application rather than calling the API directly. This would give LCM fine-grained summarization using the user's existing subscription with no subprocess overhead and no API key required. MCP sampling is not yet available in Claude Code; when it ships, it will replace both the `LCM_USE_CLI` and SDK modes.
+> The ideal implementation would use [MCP Sampling](https://modelcontextprotocol.io/docs/concepts/sampling) — a protocol feature that lets MCP servers request LLM completions through the host application rather than calling the API directly. This would give LCM fine-grained summarization with no subprocess overhead. MCP sampling is not yet available in Claude Code; when it ships, it will replace both the CLI and SDK modes.
 
 ---
 
@@ -125,7 +123,7 @@ Same threshold logic as CLI mode, but calls Haiku directly via `@anthropic-ai/sd
 This plugin is an adaptation of the following work:
 
 - **LCM Paper** — [Lossless Context Management](https://papers.voltropy.com/LCM) — the academic paper describing the hierarchical DAG approach to context management
-- **lossless-claw** — [github.com/martian-engineering/lossless-claw](https://github.com/martian-engineering/lossless-claw) — the reference TypeScript implementation for OpenClaw, which this plugin heavily adapts. lossless-claw calls an LLM directly (Haiku via the Anthropic API) to generate its DAG summaries at ~20K-token granularity. This plugin offers the same granularity via two optional modes (CLI subprocess or SDK), but defaults to capturing Claude Code's own `compact_summary` for free — no API key required. The tradeoff: coarser leaf summaries by default (one per compaction cycle), finer when a key or `LCM_USE_CLI` is configured.
+- **lossless-claw** — [github.com/martian-engineering/lossless-claw](https://github.com/martian-engineering/lossless-claw) — the reference TypeScript implementation for OpenClaw, which this plugin heavily adapts. lossless-claw calls an LLM directly (Haiku via the Anthropic API) to generate its DAG summaries at ~20K-token granularity. This plugin defaults to the same granularity via `claude -p` (free, no API key required), with an optional SDK mode for lower latency. Set `LCM_USE_CLI=false` to fall back to coarser compaction-cycle summaries.
 - **Claude Code Hooks** — [Claude Code documentation](https://docs.anthropic.com/en/docs/claude-code) — the extension system that makes this plugin possible
 
 ---
@@ -273,7 +271,7 @@ All settings via environment variables:
 | `LCM_ENABLED` | `true` | Set to `false` to disable |
 | `LCM_LOG_FILE` | `~/.lcm/lcm.log` | Log file path |
 | `LCM_DEBUG` | _(unset)_ | Set to any value to enable debug logging |
-| `LCM_USE_CLI` | `false` | Enable granular compaction via `claude -p` subprocess (free, ~5-6s/call) |
+| `LCM_USE_CLI` | `true` | Granular compaction via `claude -p` subprocess (free, ~5-6s/call). Set to `false` to disable. |
 | `LCM_CLI_MODEL` | `claude-haiku-4-5-20251001` | Model used for CLI-based summarization |
 | `LCM_ANTHROPIC_API_KEY` | _(unset)_ | Anthropic API key for SDK-based granular compaction (~1s/call). Falls back to `ANTHROPIC_API_KEY`. Takes priority over `LCM_USE_CLI`. |
 | `LCM_GRANULAR_THRESHOLD` | `20000` | Token threshold for triggering a granular summary (requires `LCM_USE_CLI` or `LCM_ANTHROPIC_API_KEY`) |

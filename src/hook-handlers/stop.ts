@@ -32,7 +32,7 @@ async function handler(ctx: HookContext): Promise<HookOutput> {
   );
 
   // Granular compaction: summarize every ~granularCompactThreshold tokens
-  // Priority: Haiku SDK (if API key set) > claude -p CLI (if LCM_USE_CLI=true) > skip
+  // Priority: Haiku SDK (if API key set) > claude -p CLI (on by default) > skip (if LCM_USE_CLI=false)
   const granularEnabled = config.anthropicApiKey || config.useCliSummarizer;
   if (granularEnabled && messagesIngested > 0) {
     try {
