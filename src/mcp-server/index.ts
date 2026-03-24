@@ -31,7 +31,7 @@ async function main() {
   const conversationStore = new ConversationStore(db);
   const summaryStore = new SummaryStore(db);
   const engine = new RetrievalEngine(conversationStore, summaryStore);
-  const toolCtx = { engine, conversationStore };
+  const toolCtx = { engine, conversationStore, config };
 
   const server = new Server(
     { name: 'lcm', version: '0.1.0' },
@@ -58,7 +58,7 @@ async function main() {
     }
 
     try {
-      const result = tool.handler(args ?? {}, toolCtx);
+      const result = await tool.handler(args ?? {}, toolCtx);
       return {
         content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
       };
