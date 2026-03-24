@@ -4461,19 +4461,45 @@ Anthropic.Beta = Beta;
 var { HUMAN_PROMPT, AI_PROMPT } = Anthropic;
 
 // src/core/summarize.ts
-var SUMMARIZE_PROMPT = `Summarize the key facts, decisions, code changes, file paths, and context from this conversation segment. Be concise but preserve important specifics that would be needed to continue this work:`;
-async function summarizeMessages(messages, apiKey) {
+var PROMPTS = {
+  preserve_details: "Summarize the key facts, decisions, code changes, file paths, and context from this conversation segment. Be concise but preserve important specifics that would be needed to continue this work:",
+  bullet_points: "Summarize as concise bullet points. Include only: key decisions, file paths changed, and critical state. One bullet per fact:"
+};
+function deterministicTruncate(messages, maxTokens) {
+  const full = messages.map((m) => `[${m.role}]: ${m.content}`).join("\n\n---\n\n");
+  const charLimit = maxTokens * 4;
+  return full.slice(0, charLimit);
+}
+async function summarizeMessages(messages, apiKey, options) {
+  const mode = options?.mode ?? "preserve_details";
+  const targetTokens = options?.targetTokens ?? 512;
   const client = new Anthropic({ apiKey });
   const content = messages.map((m) => `[${m.role}]: ${m.content.slice(0, 2e3)}`).join("\n\n---\n\n");
   const response = await client.messages.create({
     model: "claude-haiku-4-5-20251001",
-    max_tokens: 512,
-    messages: [{ role: "user", content: `${SUMMARIZE_PROMPT}
+    max_tokens: targetTokens,
+    messages: [{ role: "user", content: `${PROMPTS[mode]}
 
 ${content}` }]
   });
   const block = response.content[0];
   return block.type === "text" ? block.text : "";
+}
+async function summarizeWithEscalation(messages, apiKey, targetTokens = 512) {
+  const inputTokens = messages.reduce((sum, m) => sum + m.tokenCount, 0);
+  const l1 = await summarizeMessages(messages, apiKey, { mode: "preserve_details", targetTokens });
+  if (estimateTokens(l1) < inputTokens) {
+    return { text: l1, level: 1 };
+  }
+  const l2 = await summarizeMessages(messages, apiKey, {
+    mode: "bullet_points",
+    targetTokens: Math.floor(targetTokens / 2)
+  });
+  if (estimateTokens(l2) < inputTokens) {
+    return { text: l2, level: 2 };
+  }
+  const l3 = deterministicTruncate(messages, 512);
+  return { text: l3, level: 3 };
 }
 
 // src/core/summarize-cli.ts
@@ -4481,10 +4507,14 @@ import { spawn } from "node:child_process";
 var CLAUDE_CLI = process.env["LCM_CLAUDE_CMD"] ?? "claude";
 var CLAUDE_MODEL = process.env["LCM_CLI_MODEL"] ?? "claude-haiku-4-5-20251001";
 var TIMEOUT_MS = 8e3;
-var SUMMARIZE_PROMPT2 = `Summarize the key facts, decisions, code changes, file paths, and context from this conversation segment. Be concise but preserve important specifics:`;
-async function summarizeWithCLI(messages) {
+var PROMPTS2 = {
+  preserve_details: "Summarize the key facts, decisions, code changes, file paths, and context from this conversation segment. Be concise but preserve important specifics:",
+  bullet_points: "Summarize as concise bullet points. Include only: key decisions, file paths changed, and critical state. One bullet per fact:"
+};
+async function summarizeWithCLI(messages, options) {
+  const mode = options?.mode ?? "preserve_details";
   const content = messages.map((m) => `[${m.role}]: ${m.content.slice(0, 2e3)}`).join("\n\n---\n\n");
-  const prompt = `${SUMMARIZE_PROMPT2}
+  const prompt = `${PROMPTS2[mode]}
 
 ${content}`;
   return new Promise((resolve, reject) => {
@@ -4515,6 +4545,19 @@ ${content}`;
     });
   });
 }
+async function summarizeWithCLIEscalation(messages, targetTokens = 512) {
+  const inputTokens = messages.reduce((sum, m) => sum + m.tokenCount, 0);
+  const l1 = await summarizeWithCLI(messages, { mode: "preserve_details" });
+  if (estimateTokens(l1) < inputTokens) {
+    return { text: l1, level: 1 };
+  }
+  const l2 = await summarizeWithCLI(messages, { mode: "bullet_points" });
+  if (estimateTokens(l2) < inputTokens) {
+    return { text: l2, level: 2 };
+  }
+  const l3 = deterministicTruncate(messages, 512);
+  return { text: l3, level: 3 };
+}
 
 // src/hook-handlers/stop.ts
 async function handler(ctx) {
@@ -4539,7 +4582,7 @@ async function handler(ctx) {
         const maxSeq = pending[pending.length - 1].sequenceNumber;
         const mode = config.anthropicApiKey ? "haiku-sdk" : "claude-cli";
         logger.info("Stop: token threshold reached, summarizing", { tokens: pendingTokens, messages: pending.length, mode });
-        const summaryText = config.anthropicApiKey ? await summarizeMessages(pending, config.anthropicApiKey) : await summarizeWithCLI(pending);
+        const { text: summaryText, level: escalationLevel } = config.anthropicApiKey ? await summarizeWithEscalation(pending, config.anthropicApiKey) : await summarizeWithCLIEscalation(pending);
         summaryStore.insertSummary({
           conversationId: conversation.id,
           parentId: null,
@@ -4549,7 +4592,7 @@ async function handler(ctx) {
           messageRangeStart: lastSeq + 1,
           messageRangeEnd: maxSeq
         });
-        logger.info("Stop: granular summary stored", { range: `${lastSeq + 1}-${maxSeq}`, mode });
+        logger.info("Stop: granular summary stored", { range: `${lastSeq + 1}-${maxSeq}`, mode, escalationLevel });
       }
     } catch (err) {
       logger.warn("Stop: granular summarization failed", { err });
