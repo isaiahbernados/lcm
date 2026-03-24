@@ -17,19 +17,32 @@ export class RetrievalEngine {
    * Full-text or LIKE search across all stored messages.
    */
   grep(query: string, conversationId?: string, limit = 50, summaryId?: string): GrepResult[] {
-    let messages = this.conversationStore.search(query, conversationId, limit);
+    // When scoping to a summary, search within its conversation with a higher
+    // internal limit so post-filter doesn't discard all results.
+    let searchConvId = conversationId;
+    let searchLimit = limit;
+    let scopeSummary: ReturnType<SummaryStore['getSummary']> = null;
 
-    // Optional: restrict to messages within a specific summary's scope
     if (summaryId) {
-      const scopeSummary = this.summaryStore.getSummary(summaryId);
+      scopeSummary = this.summaryStore.getSummary(summaryId);
       if (scopeSummary) {
-        messages = messages.filter(
-          (m) =>
-            m.conversationId === scopeSummary.conversationId &&
-            m.sequenceNumber >= scopeSummary.messageRangeStart &&
-            m.sequenceNumber <= scopeSummary.messageRangeEnd
-        );
+        searchConvId = searchConvId ?? scopeSummary.conversationId;
+        searchLimit = Math.max(limit * 5, 200);
       }
+    }
+
+    let messages = this.conversationStore.search(query, searchConvId, searchLimit);
+
+    // Filter to messages within the summary's scope
+    if (scopeSummary) {
+      messages = messages
+        .filter(
+          (m) =>
+            m.conversationId === scopeSummary!.conversationId &&
+            m.sequenceNumber >= scopeSummary!.messageRangeStart &&
+            m.sequenceNumber <= scopeSummary!.messageRangeEnd
+        )
+        .slice(0, limit);
     }
 
     // Build a cache of summaries per conversation for covering-summary lookup
