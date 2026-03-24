@@ -14,7 +14,7 @@ export interface LcmConfig {
   anthropicApiKey: string | null;
   /** Token threshold for triggering a granular summary (requires anthropicApiKey or useCliSummarizer). Default 20000. */
   granularCompactThreshold: number;
-  /** Use `claude -p` subprocess for granular compaction instead of Haiku SDK. Free (uses subscription). Set LCM_USE_CLI=true. */
+  /** Use `claude -p` subprocess for granular compaction (free, uses subscription). On by default. Set LCM_USE_CLI=false to disable. */
   useCliSummarizer: boolean;
   /** Number of uncondensed level-0 summaries before triggering DAG condensation into a level-1 summary. Default 5. */
   condensationThreshold: number;
@@ -32,7 +32,7 @@ export function loadConfig(): LcmConfig {
     enabled: (process.env['LCM_ENABLED'] ?? 'true') !== 'false',
     anthropicApiKey: process.env['LCM_ANTHROPIC_API_KEY'] ?? process.env['ANTHROPIC_API_KEY'] ?? null,
     granularCompactThreshold: parseInt(process.env['LCM_GRANULAR_THRESHOLD'] ?? '20000', 10),
-    useCliSummarizer: (process.env['LCM_USE_CLI'] ?? 'false') !== 'false',
+    useCliSummarizer: (process.env['LCM_USE_CLI'] ?? 'true') !== 'false',
     condensationThreshold: parseInt(process.env['LCM_CONDENSATION_THRESHOLD'] ?? '5', 10),
   };
 }
