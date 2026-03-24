@@ -1,6 +1,6 @@
 {
   "name": "lcm",
-  "version": "0.1.6",
+  "version": "0.2.0",
   "description": "Lossless Context Management for Claude Code — persists every message in SQLite and re-injects context after compaction so nothing is ever lost.",
   "type": "module",
   "main": "dist/mcp-server/index.js",

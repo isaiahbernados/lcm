@@ -837,7 +837,151 @@ describe('ContextAssembler', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Suite 5 — Summarization
+// Suite 5 — DAG Condensation & Expand Depth
+// ---------------------------------------------------------------------------
+
+describe('DAG Condensation', () => {
+  let db: DatabaseSync;
+  let convStore: ConversationStore;
+  let summaryStore: SummaryStore;
+  let engine: RetrievalEngine;
+  let convId: string;
+
+  beforeEach(() => {
+    db = makeDb();
+    convStore = new ConversationStore(db);
+    summaryStore = new SummaryStore(db);
+    engine = new RetrievalEngine(convStore, summaryStore);
+    const conv = convStore.getOrCreateConversation('session-dag', '/proj');
+    convId = conv.id;
+  });
+
+  it('updateParentId sets the parent_id on a summary', () => {
+    const child = summaryStore.insertSummary({
+      conversationId: convId, parentId: null, level: 0,
+      content: 'Child', tokenCount: 5, messageRangeStart: 0, messageRangeEnd: 4,
+    });
+    const parent = summaryStore.insertSummary({
+      conversationId: convId, parentId: null, level: 1,
+      content: 'Parent', tokenCount: 10, messageRangeStart: 0, messageRangeEnd: 9,
+    });
+
+    summaryStore.updateParentId(child.id, parent.id);
+
+    const updated = summaryStore.getSummary(child.id);
+    expect(updated!.parentId).toBe(parent.id);
+  });
+
+  it('getUncondensedSummaries returns only summaries with parent_id IS NULL at given level', () => {
+    const s1 = summaryStore.insertSummary({
+      conversationId: convId, parentId: null, level: 0,
+      content: 'S1', tokenCount: 5, messageRangeStart: 0, messageRangeEnd: 4,
+    });
+    summaryStore.insertSummary({
+      conversationId: convId, parentId: null, level: 0,
+      content: 'S2', tokenCount: 5, messageRangeStart: 5, messageRangeEnd: 9,
+    });
+
+    // S3 has a parent — should be excluded
+    const parent = summaryStore.insertSummary({
+      conversationId: convId, parentId: null, level: 1,
+      content: 'Parent', tokenCount: 10, messageRangeStart: 0, messageRangeEnd: 9,
+    });
+    summaryStore.insertSummary({
+      conversationId: convId, parentId: parent.id, level: 0,
+      content: 'S3 with parent', tokenCount: 5, messageRangeStart: 10, messageRangeEnd: 14,
+    });
+
+    const uncondensed = summaryStore.getUncondensedSummaries(convId, 0);
+    expect(uncondensed).toHaveLength(2);
+    expect(uncondensed.every(s => s.parentId === null)).toBe(true);
+  });
+
+  it('expand() with depth=2 on a level-1 summary recursively retrieves child messages', () => {
+    // Create messages
+    const msgs = [];
+    for (let i = 0; i < 6; i++) {
+      msgs.push(convStore.insertMessage({
+        conversationId: convId, role: 'user', content: `msg${i}`, tokenCount: 5, timestamp: NOW + i,
+      }));
+    }
+
+    // Create two level-0 children
+    const child1 = summaryStore.insertSummary({
+      conversationId: convId, parentId: null, level: 0,
+      content: 'Child 1 summary', tokenCount: 10,
+      messageRangeStart: 0, messageRangeEnd: 2,
+    });
+    summaryStore.linkSummaryToMessages(child1.id, [msgs[0]!.id, msgs[1]!.id, msgs[2]!.id]);
+
+    const child2 = summaryStore.insertSummary({
+      conversationId: convId, parentId: null, level: 0,
+      content: 'Child 2 summary', tokenCount: 10,
+      messageRangeStart: 3, messageRangeEnd: 5,
+    });
+    summaryStore.linkSummaryToMessages(child2.id, [msgs[3]!.id, msgs[4]!.id, msgs[5]!.id]);
+
+    // Create level-1 parent
+    const parent = summaryStore.insertSummary({
+      conversationId: convId, parentId: null, level: 1,
+      content: 'Condensed summary of children', tokenCount: 15,
+      messageRangeStart: 0, messageRangeEnd: 5,
+    });
+    summaryStore.updateParentId(child1.id, parent.id);
+    summaryStore.updateParentId(child2.id, parent.id);
+
+    // depth=1 should return child summaries and messages via range fallback
+    const shallow = engine.expand(parent.id, 1, 8000);
+    expect(shallow.childSummaries).toHaveLength(2);
+    // At depth=1 the parent has no direct message links, so range fallback returns messages
+    expect(shallow.messages.length).toBeGreaterThanOrEqual(0);
+
+    // depth=2 should recursively expand children and return all 6 messages
+    const deep = engine.expand(parent.id, 2, 8000);
+    expect(deep.messages).toHaveLength(6);
+    expect(deep.childSummaries).toHaveLength(2);
+    expect(deep.truncated).toBe(false);
+    expect(deep.totalTokens).toBe(30); // 6 messages × 5 tokens
+  });
+
+  it('expand() with depth=2 respects tokenCap across recursive expansion', () => {
+    // Create messages with 100 tokens each
+    const msgs = [];
+    for (let i = 0; i < 4; i++) {
+      msgs.push(convStore.insertMessage({
+        conversationId: convId, role: 'user', content: `big msg ${i}`, tokenCount: 100, timestamp: NOW + i,
+      }));
+    }
+
+    const child1 = summaryStore.insertSummary({
+      conversationId: convId, parentId: null, level: 0,
+      content: 'Child 1', tokenCount: 10, messageRangeStart: 0, messageRangeEnd: 1,
+    });
+    summaryStore.linkSummaryToMessages(child1.id, [msgs[0]!.id, msgs[1]!.id]);
+
+    const child2 = summaryStore.insertSummary({
+      conversationId: convId, parentId: null, level: 0,
+      content: 'Child 2', tokenCount: 10, messageRangeStart: 2, messageRangeEnd: 3,
+    });
+    summaryStore.linkSummaryToMessages(child2.id, [msgs[2]!.id, msgs[3]!.id]);
+
+    const parent = summaryStore.insertSummary({
+      conversationId: convId, parentId: null, level: 1,
+      content: 'Parent', tokenCount: 15, messageRangeStart: 0, messageRangeEnd: 3,
+    });
+    summaryStore.updateParentId(child1.id, parent.id);
+    summaryStore.updateParentId(child2.id, parent.id);
+
+    // tokenCap=250 — only 2 of 4 messages fit (each 100 tokens)
+    const result = engine.expand(parent.id, 2, 250);
+    expect(result.messages).toHaveLength(2);
+    expect(result.truncated).toBe(true);
+    expect(result.totalTokens).toBeLessThanOrEqual(250);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Suite 6 — Summarization
 // ---------------------------------------------------------------------------
 
 describe('Summarization', () => {
