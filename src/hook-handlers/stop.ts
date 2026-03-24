@@ -11,6 +11,7 @@ import { ingestNewMessages } from './ingest.js';
 import { summarizeWithEscalation } from '../core/summarize.js';
 import { summarizeWithCLIEscalation } from '../core/summarize-cli.js';
 import { estimateTokens } from '../core/transcript-reader.js';
+import { condenseIfNeeded } from '../core/condense.js';
 import { logger } from '../utils/logger.js';
 
 async function handler(ctx: HookContext): Promise<HookOutput> {
@@ -61,6 +62,12 @@ async function handler(ctx: HookContext): Promise<HookOutput> {
         summaryStore.linkSummaryToMessages(summary.id, pending.map(m => m.id));
 
         logger.info('Stop: granular summary stored', { range: `${lastSeq + 1}-${maxSeq}`, mode, escalationLevel });
+
+        // Condense level-0 summaries into level-1 if enough have accumulated
+        const condensed = await condenseIfNeeded(conversation.id, summaryStore, config);
+        if (condensed > 0) {
+          logger.info('Stop: DAG condensation completed', { condensedCount: condensed });
+        }
       }
     } catch (err) {
       // Granular compaction is best-effort — never block the Stop hook

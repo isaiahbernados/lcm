@@ -116,6 +116,19 @@ export class SummaryStore {
     return rows.map((r) => r.message_id);
   }
 
+  /** Update a summary's parentId (used by condensation to link children to their parent). */
+  updateParentId(summaryId: string, parentId: string): void {
+    this.db.prepare('UPDATE summaries SET parent_id = ? WHERE id = ?').run(parentId, summaryId);
+  }
+
+  /** Get uncondensed summaries at a given level (parent_id IS NULL). */
+  getUncondensedSummaries(conversationId: string, level: number): LcmSummary[] {
+    const rows = this.db.prepare(
+      'SELECT * FROM summaries WHERE conversation_id = ? AND level = ? AND parent_id IS NULL ORDER BY message_range_start ASC'
+    ).all(conversationId, level) as unknown as SummaryRow[];
+    return rows.map(rowToSummary);
+  }
+
   /** Get the highest compacted sequence number for a conversation */
   getMaxCompactedSequence(conversationId: string): number {
     const row = this.db.prepare(

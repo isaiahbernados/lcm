@@ -112,7 +112,8 @@ export class RetrievalEngine {
 
   /**
    * Expand a summary: retrieve its source messages and child summaries.
-   * Respects a token budget.
+   * Respects a token budget. When depth > 1 and the summary has children,
+   * recursively expands children to retrieve their underlying messages.
    */
   expand(summaryId: string, depth = 1, tokenCap = 8000): ExpandResult {
     const summary = this.summaryStore.getSummary(summaryId);
@@ -120,8 +121,34 @@ export class RetrievalEngine {
       return { summaryId, messages: [], childSummaries: [], truncated: false, totalTokens: 0 };
     }
 
-    const messageIds = this.summaryStore.getMessageIdsForSummary(summaryId);
     const childSummaries = this.summaryStore.getChildSummaries(summaryId);
+
+    // For condensed summaries (level > 0) with children and depth > 1,
+    // recursively expand children to get their underlying messages
+    if (depth > 1 && childSummaries.length > 0) {
+      const messages = [];
+      let totalTokens = 0;
+      let truncated = false;
+
+      for (const child of childSummaries) {
+        if (truncated) break;
+        const childResult = this.expand(child.id, depth - 1, tokenCap - totalTokens);
+        for (const msg of childResult.messages) {
+          if (totalTokens + msg.tokenCount > tokenCap) {
+            truncated = true;
+            break;
+          }
+          messages.push(msg);
+          totalTokens += msg.tokenCount;
+        }
+        if (childResult.truncated) truncated = true;
+      }
+
+      return { summaryId, messages, childSummaries, truncated, totalTokens };
+    }
+
+    // Leaf expansion: get messages directly
+    const messageIds = this.summaryStore.getMessageIdsForSummary(summaryId);
 
     let totalTokens = 0;
     const messages = [];

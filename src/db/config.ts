@@ -16,6 +16,8 @@ export interface LcmConfig {
   granularCompactThreshold: number;
   /** Use `claude -p` subprocess for granular compaction instead of Haiku SDK. Free (uses subscription). Set LCM_USE_CLI=true. */
   useCliSummarizer: boolean;
+  /** Number of uncondensed level-0 summaries before triggering DAG condensation into a level-1 summary. Default 5. */
+  condensationThreshold: number;
 }
 
 function defaultDbPath(): string {
@@ -31,5 +33,6 @@ export function loadConfig(): LcmConfig {
     anthropicApiKey: process.env['LCM_ANTHROPIC_API_KEY'] ?? process.env['ANTHROPIC_API_KEY'] ?? null,
     granularCompactThreshold: parseInt(process.env['LCM_GRANULAR_THRESHOLD'] ?? '20000', 10),
     useCliSummarizer: (process.env['LCM_USE_CLI'] ?? 'false') !== 'false',
+    condensationThreshold: parseInt(process.env['LCM_CONDENSATION_THRESHOLD'] ?? '5', 10),
   };
 }
